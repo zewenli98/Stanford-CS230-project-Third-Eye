@@ -1,0 +1,4 @@
+prompt_id,prompt_text,image_name
+1,Where is the lemon bowl?,kitchen_sample_1.png
+2,"I need a few apples, where can I find them?",kitchen_sample_1.png
+3,"I need 3 coffee mugs, where can I find them?",kitchen_sample_3.png
