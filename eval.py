@@ -13,10 +13,13 @@ import io
 import json
 from tqdm import tqdm
 import gc
+from peft import PeftModel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+BASE_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
 
 # Data classes for better type management
 @dataclass
@@ -59,7 +62,7 @@ class LocalLLMProcessor:
         self.tokenizer = None
         self.current_model_name = None
         
-    def load_model(self, model_name: str):
+    def load_model(self, model_name: str, processor_name: str):
         """
         Load a local Qwen model
         
@@ -84,14 +87,16 @@ class LocalLLMProcessor:
         try:
             # For Qwen-VL models (vision-language models)
             if "VL" in model_name or "vl" in model_name:
-                
-                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                    device_map="auto" if self.device == "cuda" else None
-                )
-                self.processor = AutoProcessor.from_pretrained(model_name)
-                
+                if "lora" in model_name.lower():
+                    base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                        BASE_MODEL, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
+                    ).cuda()
+                    self.model = PeftModel.from_pretrained(base_model, model_name).cuda().eval()
+                else:
+                    self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                        model_name, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
+                    )
+                self.processor = AutoProcessor.from_pretrained(processor_name, trust_remote_code=True)
         
             if self.device == "cpu":
                 self.model = self.model.to(self.device)
@@ -104,19 +109,20 @@ class LocalLLMProcessor:
             logger.error(f"Error loading model {model_name}: {e}")
             raise
     
-    def call_llm_batch(self, model_name: str, query_list: List[Query]) -> List[str]:
+    def call_llm_batch(self, model_name: str, processor_name: str, query_list: List[Query]) -> List[str]:
         """
         Call local LLM model in batch with images and prompts
         
         Args:
             model_name: Name/path of the model
+            processor_name: Name/path of the processor
             query_list: List of Query objects containing images and prompts
             
         Returns:
             List of response texts from the LLM
         """
         # Load model if not already loaded
-        self.load_model(model_name)
+        self.load_model(model_name, processor_name)
         
         responses = []
         logger.info(f"Processing {len(query_list)} queries with model: {model_name}")
@@ -344,7 +350,7 @@ def save_results_to_csv(
     return output_path
 
 def eval(
-    model_names: List[str],
+    model_processor_name_dict: Dict[str, str],
     csv_path: str = "queries/prompts.csv",
     images_folder: str = "queries/images",
     output_folder: str = "results",
@@ -354,7 +360,7 @@ def eval(
     Evaluate multiple models and generate result CSVs
     
     Args:
-        model_names: List of model names/paths to evaluate
+        model_processor_name_dict: Dictionary of model names/paths to processor names/paths to evaluate
         csv_path: Path to CSV file with prompts
         images_folder: Path to images folder
         output_folder: Folder to save result CSVs
@@ -365,12 +371,14 @@ def eval(
     
     Example:
         # For Qwen models
-        model_names = [
-            "Qwen/Qwen2-VL-2B-Instruct",  # Vision-language model
-            "./models/qwen-3b-local"        # Local path to model
-        ]
-        results = eval(model_names)
+        model_processor_name_dict = {
+            "Qwen/Qwen2-VL-2B-Instruct": "Qwen/Qwen2-VL-2B-Instruct-processor",
+            "./models/qwen-3b-local": "./models/qwen-3b-local-processor"
+        }
+        results = eval(model_processor_name_dict)
     """
+    model_names = list(model_processor_name_dict.keys())
+    processor_names = list(model_processor_name_dict.values())
     logger.info(f"Starting evaluation for models: {model_names}")
     
     # Load queries once for all models
@@ -389,7 +397,7 @@ def eval(
     # Process each model
     output_paths = {}
     
-    for model_name in model_names:
+    for model_name, processor_name in zip(model_names, processor_names):
         logger.info(f"\n{'='*50}")
         logger.info(f"Evaluating model: {model_name}")
         logger.info(f"{'='*50}")
@@ -397,7 +405,7 @@ def eval(
         try:
             # Call LLM in batch
             logger.info(queries)
-            responses = processor.call_llm_batch(model_name, queries)
+            responses = processor.call_llm_batch(model_name, processor_name, queries)
             
             # Create Result objects
             results = []
@@ -440,15 +448,20 @@ def eval(
     
     return output_paths
 
-def main():  
-    model_names = [
-        "Qwen/Qwen2-VL-2B-Instruct",
-        # "/path/to//model"
-    ]
+def main():
+    FULL_PARAMS_PROCESSOR = "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor"
+    LORA_PROCESSOR = "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor"
+    
+    model_processor_name_dict = {
+        # TODO: change here
+        "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen/Qwen2.5-VL-3B-Instruct",
+        # "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
+        "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
+    }
     
     # Run evaluation
     results = eval(
-        model_names=model_names,
+        model_processor_name_dict=model_processor_name_dict,
         device="cuda" if torch.cuda.is_available() else "cpu"
     )
     
