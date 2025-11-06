@@ -1,0 +1,46 @@
+prompt_id,prompt_text,image_name,model_name,llm_response
+1,"
+    **Role:** You are a visual assistant AI for a blind user.
+
+    **Task:** The user will provide an image of their environment and ask to find an object. You must analyze the image from their perspective and give clear, verbal instructions to help them locate it.
+
+    **Instruction Guidelines:**
+        1.  **Use Relative Directions:** Always use terms like 'in front of you,' 'to your left,' 'to your right,' 'reach down,' or 'at your waist level'.
+        2.  **Use Clear Distances:** Always use 'inches' or 'feet' to describe the distance.
+        3.  **Use Landmarks:** Reference other objects. For example: ""It's on the table, to the right 5 inches of your keyboard.""
+        4.  **Prioritize Safety:** If you see an obstacle, mention it. For example: ""Move forward one step, but be aware there is a bag on the floor to your left.""
+        5.  **Assumption:** The user is a blind person and cannot see the image. You must describe the image in a way that is concise and easy for them to understand.
+
+    **User's Request:**
+
+Where is the lemon bowl?",kitchen_sample_1.png,./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-3B-Instruct/epoch-3,The lemon bowl is located below the coffee maker.
+2,"
+    **Role:** You are a visual assistant AI for a blind user.
+
+    **Task:** The user will provide an image of their environment and ask to find an object. You must analyze the image from their perspective and give clear, verbal instructions to help them locate it.
+
+    **Instruction Guidelines:**
+        1.  **Use Relative Directions:** Always use terms like 'in front of you,' 'to your left,' 'to your right,' 'reach down,' or 'at your waist level'.
+        2.  **Use Clear Distances:** Always use 'inches' or 'feet' to describe the distance.
+        3.  **Use Landmarks:** Reference other objects. For example: ""It's on the table, to the right 5 inches of your keyboard.""
+        4.  **Prioritize Safety:** If you see an obstacle, mention it. For example: ""Move forward one step, but be aware there is a bag on the floor to your left.""
+        5.  **Assumption:** The user is a blind person and cannot see the image. You must describe the image in a way that is concise and easy for them to understand.
+
+    **User's Request:**
+
+I need a few apples, where can I find them?",kitchen_sample_1.png,./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-3B-Instruct/epoch-3,The distance between the black cast iron skillet and the bag is approximately 7.9 inches.
+3,"
+    **Role:** You are a visual assistant AI for a blind user.
+
+    **Task:** The user will provide an image of their environment and ask to find an object. You must analyze the image from their perspective and give clear, verbal instructions to help them locate it.
+
+    **Instruction Guidelines:**
+        1.  **Use Relative Directions:** Always use terms like 'in front of you,' 'to your left,' 'to your right,' 'reach down,' or 'at your waist level'.
+        2.  **Use Clear Distances:** Always use 'inches' or 'feet' to describe the distance.
+        3.  **Use Landmarks:** Reference other objects. For example: ""It's on the table, to the right 5 inches of your keyboard.""
+        4.  **Prioritize Safety:** If you see an obstacle, mention it. For example: ""Move forward one step, but be aware there is a bag on the floor to your left.""
+        5.  **Assumption:** The user is a blind person and cannot see the image. You must describe the image in a way that is concise and easy for them to understand.
+
+    **User's Request:**
+
+I need 3 coffee mugs, where can I find them?",kitchen_sample_3.png,./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-3B-Instruct/epoch-3,The basket is located at the bottom edge of the image.
