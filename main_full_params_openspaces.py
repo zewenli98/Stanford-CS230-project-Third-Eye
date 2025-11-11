@@ -8,13 +8,13 @@ import argparse
 
 
 BASE_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
-DATASET = "remyxai/SpaceThinker"
+DATASET = "remyxai/OpenSpaces_MC_R1"
 EPOCHS = 3
 BS = 32
 SAVE_DIR = f"./finetuned_models/full_params-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
 
 
-class Dataset(torch.utils.data.Dataset):
+class OpenSpaces_MC_R1Dataset(torch.utils.data.Dataset):
     def __init__(self, split="train"):
         self.ds = load_dataset(DATASET)[split]
 
@@ -27,9 +27,9 @@ class Dataset(torch.utils.data.Dataset):
         else:
             image = img.convert("RGB") if hasattr(img, "convert") else img
 
-        questions = sample.get("input")
-        answers = sample.get("output")
-        return image, {"questions": questions, "answers": answers}
+        messages = sample.get("messages")
+        reasoning = sample.get("reasoning")
+        return image, {"messages": messages, "reasoning": reasoning}
 
     def __len__(self):
         return len(self.ds)
@@ -43,15 +43,9 @@ class QwenTrainer(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         images, info = batch
-        questions = info["questions"]
-        answers = info["answers"]
-        messages_list = []
-        for q, a in zip(questions, answers):
-            messages_list.append([
-                {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": q}]},
-                {"role": "assistant", "content": [{"type": "text", "text": a}]},
-            ])
-        texts = [self.processor.apply_chat_template(m, add_generation_prompt=False) for m in messages_list]
+        messages = info["messages"]
+        reasoning = info["reasoning"]
+        texts = [self.processor.apply_chat_template(m, add_generation_prompt=False) for m in messages]
         inputs = self.processor(images=images, text=texts, return_tensors="pt", padding=True)
         inputs = {k: v.cuda() for k, v in inputs.items()}
         inputs["labels"] = inputs["input_ids"].clone()
@@ -77,16 +71,12 @@ class QwenTrainer(L.LightningModule):
 
 def collate_fn(batch):
     images = [b[0] for b in batch]
-    questions = [b[1]["questions"] for b in batch]
-    answers = [b[1]["answers"] for b in batch]
-    return images, {"questions": questions, "answers": answers}
+    messages = [b[1]["messages"] for b in batch]
+    reasoning = [b[1]["reasoning"] for b in batch]
+    return images, {"messages": messages, "reasoning": reasoning}
 
 
-def run_inference(image, question, model, processor):
-    # image = Image.open(img_path).convert("RGB")
-    messages = [
-        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
-    ]
+def run_inference(image, messages, model, processor):
     chat = processor.apply_chat_template(messages, add_generation_prompt=True)
     inputs = processor(text=[chat], images=[image], return_tensors="pt", padding=True)
     inputs = {k: v.cuda() for k, v in inputs.items()}
@@ -96,7 +86,7 @@ def run_inference(image, question, model, processor):
 
 def run_inference_on_test_set(model, processor, num_of_batches=1):
     # Run inference for all images in the load_dataset(DATASET)["test"]
-    test_dataset = Dataset("test")
+    test_dataset = OpenSpaces_MC_R1Dataset("test")
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=BS, shuffle=False, collate_fn=collate_fn)
     for i, batch in enumerate(test_loader):
         if i > num_of_batches:
@@ -122,8 +112,8 @@ if __name__ == "__main__":
     # args for inference
     parser.add_argument("--model", "-m", type=str, default=f"{SAVE_DIR}/epoch-{EPOCHS}")
     parser.add_argument("--processor", "-p", type=str, default=f"{SAVE_DIR}/processor")
-    parser.add_argument("--image", "-i", type=str, required=True)
-    parser.add_argument("--question", "-q", type=str, required=True)
+    parser.add_argument("--image", "-i", type=str)
+    parser.add_argument("--question", "-q", type=str)
     args = parser.parse_args()
     # example: python main_full_params.py --model=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1 --processor=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
     
@@ -146,7 +136,7 @@ if __name__ == "__main__":
             model.enable_input_require_grads()
 
         processor = AutoProcessor.from_pretrained(BASE_MODEL, trust_remote_code=True)
-        train_dataset = Dataset("train")
+        train_dataset = OpenSpaces_MC_R1Dataset("train")
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BS, shuffle=True, collate_fn=collate_fn)
         trainer = L.Trainer(max_epochs=EPOCHS, devices=1, accelerator="auto", precision="bf16-mixed", accumulate_grad_batches=2)
         trainer.fit(QwenTrainer(model, processor), train_loader)

@@ -296,10 +296,11 @@ def update_prompt_context(prompt: str) -> str:
     **Task:** The user will provide an image of their environment and ask to find an object. You must analyze the image from their perspective and give clear, verbal instructions to help them locate it.
 
     **Instruction Guidelines:**
-        1.  **Use Relative Directions:** Always use terms like 'in front of you,' 'to your left,' 'to your right,' 'reach down,' or 'at your waist level.'
-        2.  **Use Clear Distances:** Use 'inches' or 'feet.' '
+        1.  **Use Relative Directions:** Always use terms like 'in front of you,' 'to your left,' 'to your right,' 'reach down,' or 'at your waist level'.
+        2.  **Use Clear Distances:** Always use 'inches' or 'feet' to describe the distance.
         3.  **Use Landmarks:** Reference other objects. For example: "It's on the table, to the right 5 inches of your keyboard."
         4.  **Prioritize Safety:** If you see an obstacle, mention it. For example: "Move forward one step, but be aware there is a bag on the floor to your left."
+        5.  **Assumption:** The user is a blind person and cannot see the image. You must describe the image in a way that is concise and easy for them to understand.
 
     **User's Request:**
 
@@ -396,6 +397,7 @@ def eval(
     
     # Process each model
     output_paths = {}
+    model_responses = {}
     
     for model_name, processor_name in zip(model_names, processor_names):
         logger.info(f"\n{'='*50}")
@@ -418,6 +420,7 @@ def eval(
                     response=response
                 )
                 results.append(result)
+            model_responses[model_name] = responses
             
             # Save results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -445,7 +448,13 @@ def eval(
             logger.info(f"✓ {model_name}: {path}")
         else:
             logger.info(f"✗ {model_name}: Failed")
-    
+    logger.info("================ Model responses ================\n")
+    for i in range(len(queries)):
+        short_prompt = queries[i].prompt_text.split('\n')[-1]
+        logger.info(f"Query {i+1}: {short_prompt}")
+        for model_name, responses in model_responses.items():
+            logger.info(f"{model_name}: {responses[i]}")
+        logger.info("------------------------------------------------\n")
     return output_paths
 
 def main():
@@ -455,7 +464,7 @@ def main():
     model_processor_name_dict = {
         # TODO: change here
         "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen/Qwen2.5-VL-3B-Instruct",
-        # "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
+        "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
         "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
     }
     

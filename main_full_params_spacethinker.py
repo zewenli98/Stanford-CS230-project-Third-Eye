@@ -2,21 +2,19 @@ from datasets import load_dataset
 from PIL import Image
 import torch
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-from peft import LoraConfig, get_peft_model
 import lightning as L
 from torch.optim import AdamW
-from peft import PeftModel
 import argparse
 
 
 BASE_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
 DATASET = "remyxai/SpaceThinker"
-EPOCHS = 5
+EPOCHS = 3
 BS = 32
-SAVE_DIR = f"./finetuned_models/LoRA-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
+SAVE_DIR = f"./finetuned_models/full_params-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
 
 
-class Dataset(torch.utils.data.Dataset):
+class SpaceThinkerDataset(torch.utils.data.Dataset):
     def __init__(self, split="train"):
         self.ds = load_dataset(DATASET)[split]
 
@@ -65,12 +63,12 @@ class QwenTrainer(L.LightningModule):
         return AdamW(self.model.parameters(), lr=1e-5, weight_decay=0.1)
 
     def on_train_epoch_end(self):
-        # Save HF-format LoRA weights after each epoch on rank 0 only
+        # Save HF-format weights and processor after each epoch on rank 0 only
         try:
             if getattr(self.trainer, "is_global_zero", True):
                 epoch_idx = int(self.current_epoch) + 1
                 epoch_dir = f"{SAVE_DIR}/epoch-{epoch_idx}"
-                # Save only LoRA adapter weights each epoch
+                # Save model and processor in Hugging Face format
                 self.model.save_pretrained(epoch_dir, safe_serialization=True)
         except Exception as e:
             # Log but don't crash training on save errors
@@ -98,7 +96,7 @@ def run_inference(image, question, model, processor):
 
 def run_inference_on_test_set(model, processor, num_of_batches=1):
     # Run inference for all images in the load_dataset(DATASET)["test"]
-    test_dataset = Dataset("test")
+    test_dataset = SpaceThinkerDataset("test")
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=BS, shuffle=False, collate_fn=collate_fn)
     for i, batch in enumerate(test_loader):
         if i > num_of_batches:
@@ -124,10 +122,10 @@ if __name__ == "__main__":
     # args for inference
     parser.add_argument("--model", "-m", type=str, default=f"{SAVE_DIR}/epoch-{EPOCHS}")
     parser.add_argument("--processor", "-p", type=str, default=f"{SAVE_DIR}/processor")
-    parser.add_argument("--image", "-i", type=str, required=True)
-    parser.add_argument("--question", "-q", type=str, required=True)
+    parser.add_argument("--image", "-i", type=str)
+    parser.add_argument("--question", "-q", type=str)
     args = parser.parse_args()
-    # example: python main_lora.py --model=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1 --processor=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
+    # example: python main_full_params.py --model=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1 --processor=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
     
     train = args.train
     model_path = args.model
@@ -135,26 +133,28 @@ if __name__ == "__main__":
     image_path = args.image
     question = args.question
 
-    # Load the base model
-    base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        BASE_MODEL, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
-    ).cuda()
-
-    # Set LoRA
-    lora_config = LoraConfig(r=128, lora_alpha=256, target_modules=["q_proj", "v_proj"], lora_dropout=0.1, bias="none")
-    lora_model = get_peft_model(base_model, lora_config).cuda()
-
     if train:
+        # Load the base model
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            BASE_MODEL, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
+        ).cuda()
+        # Set full-parameter finetuning
+        model.train()
+        model.gradient_checkpointing_enable()
+        model.config.use_cache = False
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+
         processor = AutoProcessor.from_pretrained(BASE_MODEL, trust_remote_code=True)
-        train_dataset = Dataset("train")
+        train_dataset = SpaceThinkerDataset("train")
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BS, shuffle=True, collate_fn=collate_fn)
-        trainer = L.Trainer(max_epochs=EPOCHS, devices=1, accelerator="auto")
-        trainer.fit(QwenTrainer(lora_model, processor), train_loader)
-        # merged = lora_model.merge_and_unload()  # returns a plain HF model
-        # merged.save_pretrained(SAVE_DIR)
+        trainer = L.Trainer(max_epochs=EPOCHS, devices=1, accelerator="auto", precision="bf16-mixed", accumulate_grad_batches=2)
+        trainer.fit(QwenTrainer(model, processor), train_loader)
         processor.save_pretrained(f"{SAVE_DIR}/processor")
+
     else:
-        model = PeftModel.from_pretrained(base_model, model_path).cuda().eval()
+        # Load the fine-tuned model
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_path, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True).cuda().eval()
         processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
         image = Image.open(image_path).convert("RGB")
         output = run_inference(image, question, model, processor)
