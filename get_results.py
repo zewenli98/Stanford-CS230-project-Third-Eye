@@ -30,7 +30,15 @@ class Query:
     image_name: str
     image_path: str = None
     image: Image.Image = None
-    
+    # Additional fields from prompts.csv
+    object: str = None
+    object_distance: str = None
+    object_direction: str = None
+    scene: str = None
+    object_bbox: str = None
+    annotation: str = None
+    depth_image: str = None
+
 @dataclass
 class Result:
     """Result object containing query and response"""
@@ -39,6 +47,14 @@ class Result:
     image_name: str
     model_name: str
     response: str
+    # Additional fields from prompts.csv
+    object: str = None
+    object_distance: str = None
+    object_direction: str = None
+    scene: str = None
+    object_bbox: str = None
+    annotation: str = None
+    depth_image: str = None
 
 class LocalLLMProcessor:
     """Handle batch processing for local Qwen models"""
@@ -255,33 +271,41 @@ def load_queries_from_local(
     # Read CSV file
     with open(csv_path, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
-        
+
         for row in reader:
             prompt_id = int(row.get('prompt_id', 0))
             prompt_text = row.get('prompt_text', '').strip()
             # update prompt_text
             prompt_text = update_prompt_context(prompt_text)
             image_name = row.get('image_name', '').strip()
-            
+
             # Load image
             image_path = os.path.join(images_folder, image_name)
             if not os.path.exists(image_path):
                 logger.warning(f"Image not found: {image_path}, skipping query {prompt_id}")
                 continue
-            
+
             try:
                 # Load image with PIL
                 image = Image.open(image_path).convert('RGB')
-                
+
+                # Cache all additional columns from prompts.csv
                 query = Query(
                     prompt_id=prompt_id,
                     prompt_text=prompt_text,
                     image_name=image_name,
                     image_path=image_path,
-                    image=image
+                    image=image,
+                    object=row.get('object', ''),
+                    object_distance=row.get('object_distance', ''),
+                    object_direction=row.get('object_direction', ''),
+                    scene=row.get('scene', ''),
+                    object_bbox=row.get('object_bbox', ''),
+                    annotation=row.get('annotation', ''),
+                    depth_image=row.get('depth_image', '')
                 )
                 queries.append(query)
-                
+
             except Exception as e:
                 logger.error(f"Error loading image {image_path}: {e}")
                 continue
@@ -360,15 +384,26 @@ def save_results_to_csv(
     
     # Write results to CSV
     with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['prompt_id', 'prompt_text', 'image_name', 'model_name', 'llm_response']
+        fieldnames = [
+            'prompt_id', 'prompt_text', 'image_name', 'object',
+            'object_distance', 'object_direction', 'scene', 'object_bbox',
+            'annotation', 'depth_image', 'model_name', 'llm_response'
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
+
         writer.writeheader()
         for result in results:
             writer.writerow({
                 'prompt_id': result.prompt_id,
                 'prompt_text': result.prompt_text,
                 'image_name': result.image_name,
+                'object': result.object,
+                'object_distance': result.object_distance,
+                'object_direction': result.object_direction,
+                'scene': result.scene,
+                'object_bbox': result.object_bbox,
+                'annotation': result.annotation,
+                'depth_image': result.depth_image,
                 'model_name': result.model_name,
                 'llm_response': result.response
             })
@@ -443,7 +478,15 @@ def eval(
                     prompt_text=query.prompt_text,
                     image_name=query.image_name,
                     model_name=model_name,
-                    response=response
+                    response=response,
+                    # Include all additional fields from query
+                    object=query.object,
+                    object_distance=query.object_distance,
+                    object_direction=query.object_direction,
+                    scene=query.scene,
+                    object_bbox=query.object_bbox,
+                    annotation=query.annotation,
+                    depth_image=query.depth_image
                 )
                 results.append(result)
             model_responses[model_name] = responses
