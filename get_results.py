@@ -206,7 +206,7 @@ class LocalLLMProcessor:
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=64, # comment 512, can add back when with more GPU
+                max_new_tokens=256, # comment 512, can add back when with more GPU
                 temperature=0.7,
                 do_sample=True,
                 top_p=0.95,
