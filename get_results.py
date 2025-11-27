@@ -206,7 +206,7 @@ class LocalLLMProcessor:
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=256, # comment 512, can add back when with more GPU
+                max_new_tokens=512,
                 temperature=0.7,
                 do_sample=True,
                 top_p=0.95,
@@ -324,8 +324,8 @@ def update_prompt_context(prompt: str) -> str:
         Your job is to:
         1. Identify whether the target object appears in the image.  
         2. If present, determine its position and distance relative to the camera (the user's perspective).  
-        3. Generate safe, step-by-step navigation instructions to guide the user to the object.  
-        4. Explain how to physically reach and grab the object once they arrive.  
+        3. Generate safe, step-by-step navigation instructions to guide the user to the object, remember that user cannot see any objects. Provide the path instructions of directly movements.
+        4. Explain how to physically reach and grab the object once they arrive at a spot where they can fetch it directly.  
         5. If object cannot be found or instructions are unclear, provide corrective guidance.
 
         ---
@@ -338,11 +338,10 @@ def update_prompt_context(prompt: str) -> str:
         {
         "found": true/false,
         "object_location_in_image": {
-            "description": "Describe where the object appears in the image.",
-            "bounding_box": [x_min, y_min, x_max, y_max]  // or null if unavailable
+            "description": "Describe where the object appears in the image, or null if not present",
+            "Detailed area description": "split image into 4 parts: left top, right top, left bottom, right bottom. Describe where the object appears in each part, or null if not present",
         },
         "distance_and_direction_from_camera": {
-            "distance_feet": float or null,
             "distance_inches": float or null,
             "direction": "in front / left / right / slightly left / slightly right / above waist / below waist"
         },
