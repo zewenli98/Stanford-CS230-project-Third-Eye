@@ -6,17 +6,38 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
 import logging
+from dotenv import load_dotenv
+from openai import OpenAI
+from PIL import Image
+import base64
+from io import BytesIO
+
+# Load environment variables
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
 # ============================================================================
 # CONFIGURATION - Configure these settings
 # ============================================================================
-RESULTS_CSV_FILE = "results_Qwen_Qwen2.5-VL-3B-Instruct_20251126_064826.csv"  # Name of the results CSV file to evaluate
+RESULTS_CSV_FILE = "results_Qwen_Qwen2.5-VL-3B-Instruct_20251127_224915.csv"  # Name of the results CSV file to evaluate
 RESULTS_FOLDER = "./results"  # Folder containing results files
 # ============================================================================
 
+EVALUATION_METRICS = {
+    'found': 5,
+    'object_location_description': 5,
+    'object_location_detailed_area': 5,
+    'distance': 5,
+    'direction': 5,
+    'navigation_instructions': 5,
+    'hand_guidance': 5,
+    'fallback': 5
+}
 
 @dataclass
 class ExtractedResponse:
@@ -32,15 +53,19 @@ class ExtractedResponse:
     gt_object: str
     gt_object_distance: float  # in meters
     gt_object_direction: str
-    gt_scene: str
     gt_object_bbox: List[float]
+
+    gt_scene: str
+    annotation: Dict[str, Any]
+    depth_image: str
 
     # Parsed LLM response fields
     found: Optional[bool] = None
     predicted_bbox: Optional[List[float]] = None
-    predicted_distance_feet: Optional[float] = None
+    predicted_object_location: Optional[str] = None
+    predicted_object_location_details: Optional[str] = None
+
     predicted_distance_inches: Optional[float] = None
-    predicted_distance_meters: Optional[float] = None
     predicted_direction: Optional[str] = None
     navigation_instructions: Optional[List[str]] = None
     hand_guidance: Optional[str] = None
@@ -78,43 +103,26 @@ def load_results_from_csv(csv_path: str) -> List[Dict[str, Any]]:
 
 def extract_json_from_response(response: str) -> Optional[Dict[str, Any]]:
     """
-    Extract JSON from LLM response text.
-    The response may contain markdown code blocks or be plain JSON.
-
-    Args:
-        response: Raw LLM response text
-
-    Returns:
-        Parsed JSON dictionary or None if parsing fails
+    Extract JSON content from an LLM response containing ```json ... ``` or plain JSON.
+    Returns a Python dict.
     """
-    # Try to find JSON in markdown code blocks
-    json_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
-    matches = re.findall(json_pattern, response, re.DOTALL)
 
-    if matches:
-        # Try to parse the first match
-        try:
-            return json.loads(matches[0])
-        except json.JSONDecodeError:
-            pass
+    # 1. Remove code fences like ```json ... ```
+    cleaned = re.sub(r"```json|```", "", response, flags=re.IGNORECASE).strip()
 
-    # Try to parse the entire response as JSON
+    # 2. Sometimes model outputs extra characters before/after JSON. 
+    #    Try to extract the largest JSON object using regex.
+    json_match = re.search(r"\{[\s\S]*\}", cleaned)
+    if not json_match:
+        raise ValueError("No JSON object found in the input text")
+
+    json_str = json_match.group(0)
+
+    # 3. Parse JSON safely
     try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        pass
-
-    # Try to find JSON without code blocks (look for { ... })
-    json_pattern_no_block = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-    matches = re.findall(json_pattern_no_block, response, re.DOTALL)
-
-    for match in matches:
-        try:
-            return json.loads(match)
-        except json.JSONDecodeError:
-            continue
-
-    return None
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON extracted: {e}\nJSON string was:\n{json_str}")
 
 
 def parse_bbox(bbox_str: str) -> Optional[List[float]]:
@@ -157,11 +165,11 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     image_name = row.get('image_name', '')
     model_name = row.get('model_name', '')
     raw_response = row.get('llm_response', '')
-    goal_object = row.get('object', '')
-    goal_object_distance = float(row.get('object_distance', 0))
-    goal_object_direction = row.get('object_direction', '')
-    scene = row.get('scene', '')
-    goal_object_bbox = row.get('object_bbox', '[]')
+    gt_object = row.get('object', '')
+    gt_object_distance = float(row.get('object_distance', 0))
+    gt_object_direction = row.get('object_direction', '')
+    gt_scene = row.get('scene', '')
+    gt_object_bbox = row.get('object_bbox', '[]')
     annotation = row.get('annotation', '[]')
     depth_image = row.get('depth_image', '')
 
@@ -172,11 +180,11 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
         image_name=image_name,
         model_name=model_name,
         raw_response=raw_response,
-        goal_object=goal_object,
-        goal_object_distance=goal_object_distance,
-        goal_object_direction=goal_object_direction,
-        scene=scene,
-        goal_object_bbox=goal_object_bbox if goal_object_bbox else [],
+        gt_object=gt_object,
+        gt_object_distance=gt_object_distance,
+        gt_object_direction=gt_object_direction,
+        gt_scene=gt_scene,
+        gt_object_bbox=gt_object_bbox if gt_object_bbox else [],
         annotation=annotation,
         depth_image=depth_image
     )
@@ -195,23 +203,15 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
 
         # Extract object location
         obj_location = json_data.get('object_location_in_image', {})
-        bbox = obj_location.get('bounding_box')
-        if bbox and isinstance(bbox, list) and len(bbox) == 4:
-            extracted.predicted_bbox = [float(x) for x in bbox]
-
+        if obj_location:
+            extracted.predicted_object_location = obj_location.get('description')
+            extracted.predicted_object_location_details = obj_location.get('Detailed area description') 
+        
         # Extract distance and direction
         distance_direction = json_data.get('distance_and_direction_from_camera', {})
         if distance_direction:
-            extracted.predicted_distance_feet = distance_direction.get('distance_feet')
             extracted.predicted_distance_inches = distance_direction.get('distance_inches')
             extracted.predicted_direction = distance_direction.get('direction')
-
-            # Convert to meters if available
-            if extracted.predicted_distance_feet is not None:
-                try:
-                    extracted.predicted_distance_meters = float(extracted.predicted_distance_feet) * 0.3048
-                except (ValueError, TypeError):
-                    pass
 
         # Extract navigation instructions
         nav_instructions = json_data.get('navigation_instructions')
@@ -257,61 +257,171 @@ def extract_all_responses(csv_path: str) -> List[ExtractedResponse]:
     return extracted_responses
 
 
-def calculate_iou(bbox1: List[float], bbox2: List[float]) -> float:
+def encode_image_to_base64(image_path: str) -> str:
     """
-    Calculate Intersection over Union (IoU) between two bounding boxes.
+    Encode an image file to base64 string.
 
     Args:
-        bbox1: [x_min, y_min, x_max, y_max]
-        bbox2: [x_min, y_min, x_max, y_max]
+        image_path: Path to the image file
 
     Returns:
-        IoU score between 0 and 1
+        Base64 encoded string of the image
     """
-    if not bbox1 or not bbox2 or len(bbox1) != 4 or len(bbox2) != 4:
-        return 0.0
-
-    # Calculate intersection
-    x_left = max(bbox1[0], bbox2[0])
-    y_top = max(bbox1[1], bbox2[1])
-    x_right = min(bbox1[2], bbox2[2])
-    y_bottom = min(bbox1[3], bbox2[3])
-
-    if x_right < x_left or y_bottom < y_top:
-        return 0.0
-
-    intersection_area = (x_right - x_left) * (y_bottom - y_top)
-
-    # Calculate union
-    bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-    bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-    union_area = bbox1_area + bbox2_area - intersection_area
-
-    if union_area == 0:
-        return 0.0
-
-    return intersection_area / union_area
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
 
 
-def calculate_distance_error(predicted_meters: Optional[float],
-                             gt_meters: float) -> Optional[float]:
+def distance_evaluation(predicted_distance_inches: Optional[float],
+                       gt_distance_meters: float,
+                       tolerance_percent: float = 20.0) -> bool:
     """
-    Calculate absolute distance error in meters.
+    Evaluate if the predicted distance is within acceptable tolerance of ground truth.
 
     Args:
-        predicted_meters: Predicted distance in meters
-        gt_meters: Ground truth distance in meters
+        predicted_distance_inches: Predicted distance in inches
+        gt_distance_meters: Ground truth distance in meters
+        tolerance_percent: Acceptable error percentage (default 20%)
 
     Returns:
-        Absolute error in meters or None if prediction is missing
+        True if prediction is within tolerance, False otherwise
     """
-    if predicted_meters is None or gt_meters is None:
-        return None
+    if predicted_distance_inches is None or gt_distance_meters is None:
+        return False
 
-    return abs(predicted_meters - gt_meters)
+    # Convert predicted inches to meters (1 inch = 0.0254 meters)
+    predicted_meters = predicted_distance_inches * 0.0254
+
+    # Calculate percentage error
+    error_percent = abs(predicted_meters - gt_distance_meters) / gt_distance_meters * 100
+
+    return error_percent <= tolerance_percent
 
 
-def evaluate(extracted_responses: List[ExtractedResponse]) -> Dict[str, Any]:
+def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> Dict[str, int]:
+    """
+    Use GPT-4 Vision to evaluate all aspects of the response in a single call.
+
+    Args:
+        response: ExtractedResponse object containing predictions and ground truth
+        image_path: Path to the image file
+
+    Returns:
+        Dictionary with scores for each evaluation metric
+    """
+    # Initialize scores (all start at 0)
+    scores = {
+        'object_location_description': 0,
+        'object_location_detailed_area': 0,
+        'direction': 0,
+        'navigation_instructions': 0,
+        'hand_guidance': 0,
+        'fallback': 0
+    }
+
+    # If parsing failed or object not found when it should be, return zero scores
+    if not response.parse_success:
+        logger.warning(f"Skipping LLM evaluation for prompt_id {response.prompt_id}: parse failed")
+        return scores
+
+    # Check if image exists
+    if not os.path.exists(image_path):
+        logger.warning(f"Image not found: {image_path}. Skipping LLM evaluation.")
+        return scores
+
+    # Encode image to base64
+    try:
+        base64_image = encode_image_to_base64(image_path)
+    except Exception as e:
+        logger.error(f"Error encoding image {image_path}: {e}")
+        return scores
+
+    # Construct the evaluation prompt
+    prompt = f"""You are an expert evaluator for a visual navigation assistance system for blind and low-vision individuals.
+    Your task is to evaluate the quality of the system's response based on the image and ground truth information.
+
+    **Ground Truth Information:**
+    - Object: {response.gt_object}
+    - Scene: {response.gt_scene}
+    - Actual Distance: {response.gt_object_distance:.2f} meters
+    - Actual Direction: {response.gt_object_direction}
+
+    **System's Response:**
+    - Found: {response.found}
+    - Object Location Description: {response.predicted_object_location or 'Not provided'}
+    - Detailed Area Description: {response.predicted_object_location_details or 'Not provided'}
+    - Predicted Direction: {response.predicted_direction or 'Not provided'}
+    - Navigation Instructions: {response.navigation_instructions or 'Not provided'}
+    - Hand Guidance: {response.hand_guidance or 'Not provided'}
+    - Fallback: {response.fallback or 'Not provided'}
+
+    **Evaluation Criteria:**
+    Please evaluate each aspect on a scale and return ONLY a JSON object with the following structure:
+
+    {{
+        "object_location_description": <0-5 points>,  // How accurate is the general location description of the object?
+        "object_location_detailed_area": <0-5 points>,  // How detailed and accurate is the spatial area description?
+        "direction": <0-5 points>,  // How accurate is the direction relative to camera (left/right/center/front)?
+        "navigation_instructions": <0-5 points>,  // Are the navigation instructions clear, actionable, and safe?
+        "hand_guidance": <0-5 points>,  // Is the hand guidance instruction helpful and appropriate?
+        "fallback": <0-5 points>  // Is the fallback instruction reasonable and helpful?
+    }}
+
+    **Scoring Guidelines:**
+    - 5: Excellent - Perfect or near-perfect accuracy and helpfulness
+    - 4: Good - Accurate with minor issues
+    - 3: Acceptable - Mostly accurate but with some notable issues
+    - 2: Poor - Significant inaccuracies or unhelpful
+    - 1: Very Poor - Highly inaccurate or misleading
+    - 0: Not provided or completely wrong
+
+    Return ONLY the JSON object, no additional text."""
+
+    try:
+        # Call GPT-4 Vision API
+        response_llm = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500,
+            temperature=0.0  # Use temperature 0 for more consistent evaluation
+        )
+
+        # Extract the response text
+        llm_response_text = response_llm.choices[0].message.content.strip()
+
+        # Parse the JSON response
+        llm_scores = json.loads(llm_response_text)
+
+        # Update scores with LLM evaluation
+        for key in scores.keys():
+            if key in llm_scores:
+                scores[key] = llm_scores[key]
+
+        logger.info(f"LLM evaluation completed for prompt_id {response.prompt_id}")
+
+    except Exception as e:
+        logger.error(f"Error in LLM evaluation for prompt_id {response.prompt_id}: {e}")
+        # Return zero scores on error
+
+    return scores
+
+
+def evaluate(extracted_responses: List[ExtractedResponse]) -> List[Dict[str, Any]]:
     """
     Evaluate the extracted responses and calculate metrics.
 
@@ -319,90 +429,116 @@ def evaluate(extracted_responses: List[ExtractedResponse]) -> Dict[str, Any]:
         extracted_responses: List of ExtractedResponse objects
 
     Returns:
-        Dictionary containing evaluation metrics
+        List of dictionaries, each containing evaluation metrics for one response
     """
-    # TODO: Implement evaluation logic here
-    # This function will calculate various metrics such as:
-    # - Object detection accuracy (found vs not found)
-    # - Bounding box IoU
-    # - Distance prediction error
-    # - Direction prediction accuracy
-    # etc.
+    metrics = []
+    images_folder = "./queries/image"
 
-    metrics = {
-        'total_samples': len(extracted_responses),
-        'successful_parses': sum(1 for r in extracted_responses if r.parse_success),
-        'parse_rate': 0.0,
-    }
-
-    if metrics['total_samples'] > 0:
-        metrics['parse_rate'] = metrics['successful_parses'] / metrics['total_samples']
-
-    # Filter successfully parsed responses
-    valid_responses = [r for r in extracted_responses if r.parse_success]
-
-    if not valid_responses:
-        logger.warning("No valid responses to evaluate")
-        return metrics
-
-    # Calculate object detection metrics
-    found_count = sum(1 for r in valid_responses if r.found)
-    metrics['detection_rate'] = found_count / len(valid_responses)
-
-    # Calculate bounding box IoU
-    iou_scores = []
-    for response in valid_responses:
-        if response.predicted_bbox and response.gt_object_bbox:
-            iou = calculate_iou(response.predicted_bbox, response.gt_object_bbox)
-            iou_scores.append(iou)
-
-    if iou_scores:
-        metrics['mean_iou'] = sum(iou_scores) / len(iou_scores)
-        metrics['iou_scores'] = iou_scores
-    else:
-        metrics['mean_iou'] = 0.0
-        metrics['iou_scores'] = []
-
-    # Calculate distance prediction errors
-    distance_errors = []
-    for response in valid_responses:
-        if response.predicted_distance_meters is not None and response.gt_object_distance is not None:
-            error = calculate_distance_error(response.predicted_distance_meters,
-                                            response.gt_object_distance)
-            if error is not None:
-                distance_errors.append(error)
-
-    if distance_errors:
-        metrics['mean_distance_error'] = sum(distance_errors) / len(distance_errors)
-        metrics['distance_errors'] = distance_errors
-    else:
-        metrics['mean_distance_error'] = None
-        metrics['distance_errors'] = []
-
-    # Log evaluation results
     logger.info("="*70)
-    logger.info("Evaluation Results:")
+    logger.info("Starting Evaluation")
     logger.info("="*70)
-    logger.info(f"Total samples: {metrics['total_samples']}")
-    logger.info(f"Parse rate: {metrics['parse_rate']:.2%}")
-    logger.info(f"Detection rate: {metrics.get('detection_rate', 0):.2%}")
-    logger.info(f"Mean IoU: {metrics.get('mean_iou', 0):.4f}")
-    if metrics['mean_distance_error'] is not None:
-        logger.info(f"Mean distance error: {metrics['mean_distance_error']:.2f} meters")
+
+    for idx, response in enumerate(extracted_responses):
+        logger.info(f"Evaluating response {idx + 1}/{len(extracted_responses)} (prompt_id: {response.prompt_id})")
+
+        # Initialize metric dictionary for this response
+        metric = {
+            'prompt_id': response.prompt_id,
+            'image_name': response.image_name,
+            'found': 0,
+            'object_location_description': 0,
+            'object_location_detailed_area': 0,
+            'distance': 0,
+            'direction': 0,
+            'navigation_instructions': 0,
+            'hand_guidance': 0,
+            'fallback': 0,
+            'total_score': 0,
+            'max_possible_score': sum(EVALUATION_METRICS.values())
+        }
+
+        # Check if object detection is correct
+        # Award points if: (1) found=True and object exists, OR (2) found=False and object doesn't exist
+        if response.found and response.gt_object_distance is not None:
+            metric['found'] = EVALUATION_METRICS['found']
+        elif not response.found and response.gt_object_distance is None:
+            metric['found'] = EVALUATION_METRICS['found']
+        else:
+            metric['found'] = 0
+            logger.info(f"  - Object detection: INCORRECT (found={response.found}, gt_exists={response.gt_object_distance is not None})")
+
+        # Only evaluate further if object was correctly identified as present
+        if metric['found'] > 0 and response.found:
+            # Evaluate distance
+            if distance_evaluation(response.predicted_distance_inches, response.gt_object_distance):
+                metric['distance'] = EVALUATION_METRICS['distance']
+                logger.info(f"  - Distance: CORRECT (within tolerance)")
+            else:
+                metric['distance'] = 0
+                logger.info(f"  - Distance: INCORRECT")
+
+            # Construct image path
+            image_path = os.path.join(images_folder, response.image_name)
+
+            # Call LLM once to evaluate all remaining aspects
+            logger.info(f"  - Calling LLM for evaluation...")
+            llm_scores = evaluate_response_with_llm(response, image_path)
+
+            # Update metric with LLM scores
+            metric['object_location_description'] = llm_scores.get('object_location_description', 0)
+            metric['object_location_detailed_area'] = llm_scores.get('object_location_detailed_area', 0)
+            metric['direction'] = llm_scores.get('direction', 0)
+            metric['navigation_instructions'] = llm_scores.get('navigation_instructions', 0)
+            metric['hand_guidance'] = llm_scores.get('hand_guidance', 0)
+            metric['fallback'] = llm_scores.get('fallback', 0)
+
+            logger.info(f"  - LLM Scores: location_desc={llm_scores.get('object_location_description', 0)}, "
+                       f"detailed_area={llm_scores.get('object_location_detailed_area', 0)}, "
+                       f"direction={llm_scores.get('direction', 0)}, "
+                       f"nav={llm_scores.get('navigation_instructions', 0)}, "
+                       f"hand={llm_scores.get('hand_guidance', 0)}, "
+                       f"fallback={llm_scores.get('fallback', 0)}")
+
+        # Calculate total score for this response
+        metric['total_score'] = (
+            metric['found'] +
+            metric['object_location_description'] +
+            metric['object_location_detailed_area'] +
+            metric['distance'] +
+            metric['direction'] +
+            metric['navigation_instructions'] +
+            metric['hand_guidance'] +
+            metric['fallback']
+        )
+
+        logger.info(f"  - Total Score: {metric['total_score']}/{metric['max_possible_score']}")
+
+        metrics.append(metric)
+
+    # Calculate aggregate statistics
+    logger.info("="*70)
+    logger.info("Evaluation Summary")
+    logger.info("="*70)
+    total_samples = len(metrics)
+    avg_score = sum(m['total_score'] for m in metrics) / total_samples if total_samples > 0 else 0
+    avg_possible = sum(m['max_possible_score'] for m in metrics) / total_samples if total_samples > 0 else 0
+
+    logger.info(f"Total samples evaluated: {total_samples}")
+    logger.info(f"Average score: {avg_score:.2f}/{avg_possible:.2f} ({(avg_score/avg_possible*100) if avg_possible > 0 else 0:.1f}%)")
     logger.info("="*70)
 
     return metrics
 
 
 def save_evaluation_report(extracted_responses: List[ExtractedResponse],
-                          metrics: Dict[str, Any],
+                          metrics: List[Dict[str, Any]],
                           output_path: str):
     """
     Save detailed evaluation report to CSV.
 
     Args:
         extracted_responses: List of ExtractedResponse objects
-        metrics: Evaluation metrics dictionary
+        metrics: List of evaluation metrics dictionaries (one per response)
         output_path: Path to save the report CSV
     """
     logger.info(f"Saving evaluation report to {output_path}")
@@ -411,24 +547,29 @@ def save_evaluation_report(extracted_responses: List[ExtractedResponse],
         fieldnames = [
             'prompt_id', 'image_name', 'model_name',
             'gt_object', 'gt_distance_m', 'gt_direction', 'gt_scene',
-            'parse_success', 'found',
-            'predicted_distance_m', 'distance_error_m',
-            'gt_bbox', 'predicted_bbox', 'iou',
-            'predicted_direction', 'parse_error'
+            'parse_success', 'found_predicted', 'found_score',
+            'predicted_distance_inches', 'predicted_direction',
+            'score_object_location_desc', 'score_object_location_detailed',
+            'score_distance', 'score_direction',
+            'score_navigation', 'score_hand_guidance', 'score_fallback',
+            'total_score', 'max_score', 'percentage',
+            'parse_error'
         ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         writer.writeheader()
-        for response in extracted_responses:
-            # Calculate IoU if both bboxes available
-            iou = None
-            if response.predicted_bbox and response.gt_object_bbox:
-                iou = calculate_iou(response.predicted_bbox, response.gt_object_bbox)
 
-            # Calculate distance error
-            dist_error = None
-            if response.predicted_distance_meters and response.gt_object_distance:
-                dist_error = abs(response.predicted_distance_meters - response.gt_object_distance)
+        # Create a mapping from prompt_id to metric for easy lookup
+        metric_map = {m['prompt_id']: m for m in metrics}
+
+        for response in extracted_responses:
+            # Get the corresponding metric
+            metric = metric_map.get(response.prompt_id, {})
+
+            # Calculate percentage
+            total = metric.get('total_score', 0)
+            max_score = metric.get('max_possible_score', 1)
+            percentage = (total / max_score * 100) if max_score > 0 else 0
 
             writer.writerow({
                 'prompt_id': response.prompt_id,
@@ -439,13 +580,20 @@ def save_evaluation_report(extracted_responses: List[ExtractedResponse],
                 'gt_direction': response.gt_object_direction,
                 'gt_scene': response.gt_scene,
                 'parse_success': response.parse_success,
-                'found': response.found,
-                'predicted_distance_m': response.predicted_distance_meters,
-                'distance_error_m': dist_error,
-                'gt_bbox': json.dumps(response.gt_object_bbox) if response.gt_object_bbox else '',
-                'predicted_bbox': json.dumps(response.predicted_bbox) if response.predicted_bbox else '',
-                'iou': f"{iou:.4f}" if iou is not None else '',
+                'found_predicted': response.found,
+                'found_score': metric.get('found', 0),
+                'predicted_distance_inches': response.predicted_distance_inches,
                 'predicted_direction': response.predicted_direction,
+                'score_object_location_desc': metric.get('object_location_description', 0),
+                'score_object_location_detailed': metric.get('object_location_detailed_area', 0),
+                'score_distance': metric.get('distance', 0),
+                'score_direction': metric.get('direction', 0),
+                'score_navigation': metric.get('navigation_instructions', 0),
+                'score_hand_guidance': metric.get('hand_guidance', 0),
+                'score_fallback': metric.get('fallback', 0),
+                'total_score': total,
+                'max_score': max_score,
+                'percentage': f"{percentage:.1f}%",
                 'parse_error': response.parse_error or ''
             })
 
@@ -460,31 +608,61 @@ def main():
     results_csv_path = os.path.join(RESULTS_FOLDER, RESULTS_CSV_FILE)
 
     logger.info("="*70)
-    logger.info("Starting Evaluation")
+    logger.info("Third Eye Evaluation Pipeline")
     logger.info("="*70)
     logger.info(f"Results file: {results_csv_path}")
 
     # Extract all responses from CSV
     extracted_responses = extract_all_responses(results_csv_path)
-    # pretty print key value pair of extracted_responses[0], which is key value pairs
-    for key, value in extracted_responses[0].__dict__.items():
-        print(f"{key}: {value}")
-    # # Evaluate the responses
-    # metrics = evaluate(extracted_responses)
 
-    # # Save detailed evaluation report
-    # report_filename = RESULTS_CSV_FILE.replace('.csv', '_evaluation.csv')
-    # report_path = os.path.join(RESULTS_FOLDER, report_filename)
-    # save_evaluation_report(extracted_responses, metrics, report_path)
+    # Evaluate the responses
+    metrics = evaluate(extracted_responses)
 
-    # # Save metrics summary
-    # metrics_filename = RESULTS_CSV_FILE.replace('.csv', '_metrics.json')
-    # metrics_path = os.path.join(RESULTS_FOLDER, metrics_filename)
-    # with open(metrics_path, 'w') as f:
-    #     json.dump(metrics, f, indent=2)
-    # logger.info(f"Metrics summary saved to {metrics_path}")
+    # Save detailed evaluation report
+    report_filename = RESULTS_CSV_FILE.replace('.csv', '_evaluation.csv')
+    report_path = os.path.join(RESULTS_FOLDER, report_filename)
+    save_evaluation_report(extracted_responses, metrics, report_path)
 
-    # logger.info("\nEvaluation complete!")
+    # Calculate summary statistics
+    total_samples = len(metrics)
+    if total_samples > 0:
+        summary = {
+            'total_samples': total_samples,
+            'average_scores': {
+                'found': sum(m['found'] for m in metrics) / total_samples,
+                'object_location_description': sum(m['object_location_description'] for m in metrics) / total_samples,
+                'object_location_detailed_area': sum(m['object_location_detailed_area'] for m in metrics) / total_samples,
+                'distance': sum(m['distance'] for m in metrics) / total_samples,
+                'direction': sum(m['direction'] for m in metrics) / total_samples,
+                'navigation_instructions': sum(m['navigation_instructions'] for m in metrics) / total_samples,
+                'hand_guidance': sum(m['hand_guidance'] for m in metrics) / total_samples,
+                'fallback': sum(m['fallback'] for m in metrics) / total_samples,
+                'total': sum(m['total_score'] for m in metrics) / total_samples,
+            },
+            'max_possible_scores': EVALUATION_METRICS,
+            'total_max_possible': sum(EVALUATION_METRICS.values()),
+            'overall_percentage': (sum(m['total_score'] for m in metrics) / (total_samples * sum(EVALUATION_METRICS.values())) * 100) if total_samples > 0 else 0,
+            'individual_metrics': metrics
+        }
+    else:
+        summary = {
+            'total_samples': 0,
+            'average_scores': {},
+            'max_possible_scores': EVALUATION_METRICS,
+            'overall_percentage': 0,
+            'individual_metrics': []
+        }
+
+    # Save metrics summary
+    metrics_filename = RESULTS_CSV_FILE.replace('.csv', '_metrics.json')
+    metrics_path = os.path.join(RESULTS_FOLDER, metrics_filename)
+    with open(metrics_path, 'w') as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"Metrics summary saved to {metrics_path}")
+
+    logger.info("\n" + "="*70)
+    logger.info("Evaluation Complete!")
+    logger.info("="*70)
 
 
 if __name__ == "__main__":
