@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import re
+import argparse
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
@@ -378,6 +379,7 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
 
     try:
         # Call GPT-4 Vision API
+        logger.debug(f"Calling OpenAI API for prompt_id {response.prompt_id}")
         response_llm = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -398,14 +400,23 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
                 }
             ],
             max_tokens=500,
-            temperature=0.0  # Use temperature 0 for more consistent evaluation
+            temperature=0.0,  # Use temperature 0 for more consistent evaluation
+            response_format={"type": "json_object"}  # Request JSON mode
         )
 
         # Extract the response text
         llm_response_text = response_llm.choices[0].message.content.strip()
 
-        # Parse the JSON response
-        llm_scores = json.loads(llm_response_text)
+        # Log the raw response for debugging
+        logger.debug(f"Raw LLM response: {llm_response_text}")
+
+        # Parse the JSON response using our robust extraction function
+        llm_scores = extract_json_from_response(llm_response_text)
+
+        if llm_scores is None:
+            logger.error(f"Failed to extract JSON from LLM response for prompt_id {response.prompt_id}")
+            logger.error(f"Raw response was: {llm_response_text[:200]}...")
+            return scores
 
         # Update scores with LLM evaluation
         for key in scores.keys():
@@ -416,26 +427,31 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
 
     except Exception as e:
         logger.error(f"Error in LLM evaluation for prompt_id {response.prompt_id}: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
         # Return zero scores on error
 
     return scores
 
 
-def evaluate(extracted_responses: List[ExtractedResponse]) -> List[Dict[str, Any]]:
+def evaluate(extracted_responses: List[ExtractedResponse], test_mode: bool = True) -> List[Dict[str, Any]]:
     """
     Evaluate the extracted responses and calculate metrics.
 
     Args:
         extracted_responses: List of ExtractedResponse objects
+        test_mode: If True, only evaluate the first response (for testing)
 
     Returns:
         List of dictionaries, each containing evaluation metrics for one response
     """
     metrics = []
-    images_folder = "./queries/image"
+    images_folder = "./queries/images"
 
     logger.info("="*70)
-    logger.info("Starting Evaluation")
+    if test_mode:
+        logger.info("Starting Evaluation (TEST MODE - 1 sample only)")
+    else:
+        logger.info("Starting Evaluation")
     logger.info("="*70)
 
     for idx, response in enumerate(extracted_responses):
@@ -514,6 +530,11 @@ def evaluate(extracted_responses: List[ExtractedResponse]) -> List[Dict[str, Any
         logger.info(f"  - Total Score: {metric['total_score']}/{metric['max_possible_score']}")
 
         metrics.append(metric)
+
+        # Break after first sample if in test mode
+        if test_mode:
+            logger.info("Test mode: Stopping after 1 sample")
+            break
 
     # Calculate aggregate statistics
     logger.info("="*70)
@@ -604,6 +625,23 @@ def main():
     """
     Main function to evaluate results.
     """
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Evaluate Third Eye model results using LLM-based evaluation'
+    )
+    parser.add_argument(
+        '--test',
+        action='store_true',
+        help='Test mode: only evaluate 1 sample to save API costs'
+    )
+    parser.add_argument(
+        '--max-samples',
+        type=int,
+        default=None,
+        help='Maximum number of samples to evaluate (for testing with specific count)'
+    )
+    args = parser.parse_args()
+
     # Construct full path to results CSV
     results_csv_path = os.path.join(RESULTS_FOLDER, RESULTS_CSV_FILE)
 
@@ -611,12 +649,21 @@ def main():
     logger.info("Third Eye Evaluation Pipeline")
     logger.info("="*70)
     logger.info(f"Results file: {results_csv_path}")
+    if args.test:
+        logger.info("Mode: TEST (1 sample only)")
+    elif args.max_samples:
+        logger.info(f"Mode: LIMITED ({args.max_samples} samples)")
 
     # Extract all responses from CSV
     extracted_responses = extract_all_responses(results_csv_path)
 
+    # Limit samples if max_samples is specified
+    if args.max_samples and not args.test:
+        extracted_responses = extracted_responses[:args.max_samples]
+        logger.info(f"Limited to {len(extracted_responses)} samples")
+
     # Evaluate the responses
-    metrics = evaluate(extracted_responses)
+    metrics = evaluate(extracted_responses, test_mode=args.test)
 
     # Save detailed evaluation report
     report_filename = RESULTS_CSV_FILE.replace('.csv', '_evaluation.csv')
