@@ -30,7 +30,15 @@ class Query:
     image_name: str
     image_path: str = None
     image: Image.Image = None
-    
+    # Additional fields from prompts.csv
+    object: str = None
+    object_distance: str = None
+    object_direction: str = None
+    scene: str = None
+    object_bbox: str = None
+    annotation: str = None
+    depth_image: str = None
+
 @dataclass
 class Result:
     """Result object containing query and response"""
@@ -39,6 +47,14 @@ class Result:
     image_name: str
     model_name: str
     response: str
+    # Additional fields from prompts.csv
+    object: str = None
+    object_distance: str = None
+    object_direction: str = None
+    scene: str = None
+    object_bbox: str = None
+    annotation: str = None
+    depth_image: str = None
 
 class LocalLLMProcessor:
     """Handle batch processing for local Qwen models"""
@@ -90,11 +106,11 @@ class LocalLLMProcessor:
                 if "lora" in model_name.lower():
                     base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                         BASE_MODEL, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
-                    ).cuda()
+                    ).cuda() # this also forced model on one GPU card
                     self.model = PeftModel.from_pretrained(base_model, model_name).cuda().eval()
                 else:
                     self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                        model_name, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
+                        model_name, device_map="auto", torch_dtype=torch.float16, trust_remote_code=True
                     )
                 self.processor = AutoProcessor.from_pretrained(processor_name, trust_remote_code=True)
         
@@ -172,19 +188,20 @@ class LocalLLMProcessor:
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        
         # Process inputs
         image_inputs, video_inputs = self._process_vision_info(messages)
+        
         inputs = self.processor(
             text=[text],
             images=image_inputs,
             padding=True,
             return_tensors="pt",
         )
-        
+
         # Move to device
         inputs = inputs.to(self.device)
-        
+        # target_device = self.model.device if hasattr(self.model, 'device') else self.device
+        # inputs = {k: v.to(target_device) for k, v in inputs.items()}
         # Generate response
         with torch.no_grad():
             generated_ids = self.model.generate(
@@ -194,7 +211,7 @@ class LocalLLMProcessor:
                 do_sample=True,
                 top_p=0.95,
             )
-        
+        logger.info("received generated tokens")
         # Decode only the generated tokens
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -255,33 +272,41 @@ def load_queries_from_local(
     # Read CSV file
     with open(csv_path, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
-        
+
         for row in reader:
             prompt_id = int(row.get('prompt_id', 0))
             prompt_text = row.get('prompt_text', '').strip()
             # update prompt_text
             prompt_text = update_prompt_context(prompt_text)
             image_name = row.get('image_name', '').strip()
-            
+
             # Load image
             image_path = os.path.join(images_folder, image_name)
             if not os.path.exists(image_path):
                 logger.warning(f"Image not found: {image_path}, skipping query {prompt_id}")
                 continue
-            
+
             try:
                 # Load image with PIL
                 image = Image.open(image_path).convert('RGB')
-                
+
+                # Cache all additional columns from prompts.csv
                 query = Query(
                     prompt_id=prompt_id,
                     prompt_text=prompt_text,
                     image_name=image_name,
                     image_path=image_path,
-                    image=image
+                    image=image,
+                    object=row.get('object', ''),
+                    object_distance=row.get('object_distance', ''),
+                    object_direction=row.get('object_direction', ''),
+                    scene=row.get('scene', ''),
+                    object_bbox=row.get('object_bbox', ''),
+                    annotation=row.get('annotation', ''),
+                    depth_image=row.get('depth_image', '')
                 )
                 queries.append(query)
-                
+
             except Exception as e:
                 logger.error(f"Error loading image {image_path}: {e}")
                 continue
@@ -291,20 +316,45 @@ def load_queries_from_local(
 
 def update_prompt_context(prompt: str) -> str:
     context_prompt = """
-    **Role:** You are a visual assistant AI for a blind user.
+        **Role:**  
+        You are a visual-navigation assistant AI designed to help a blind user locate and retrieve objects using a single image.
 
-    **Task:** The user will provide an image of their environment and ask to find an object. You must analyze the image from their perspective and give clear, verbal instructions to help them locate it.
+        **High-Level Task:**  
+        The user will upload an image of their surroundings and ask you to find a specific object.  
+        Your job is to:
+        1. Identify whether the target object appears in the image.  
+        2. If present, determine its position and distance relative to the camera (the user's perspective).  
+        3. Generate safe, step-by-step navigation instructions to guide the user to the object, remember that user cannot see any objects. Provide the path instructions of directly movements.
+        4. Explain how to physically reach and grab the object once they arrive at a spot where they can fetch it directly.  
+        5. If object cannot be found or instructions are unclear, provide corrective guidance.
 
-    **Instruction Guidelines:**
-        1.  **Use Relative Directions:** Always use terms like 'in front of you,' 'to your left,' 'to your right,' 'reach down,' or 'at your waist level'.
-        2.  **Use Clear Distances:** Always use 'inches' or 'feet' to describe the distance.
-        3.  **Use Landmarks:** Reference other objects. For example: "It's on the table, to the right 5 inches of your keyboard."
-        4.  **Prioritize Safety:** If you see an obstacle, mention it. For example: "Move forward one step, but be aware there is a bag on the floor to your left."
-        5.  **Assumption:** The user is a blind person and cannot see the image. You must describe the image in a way that is concise and easy for them to understand.
+        ---
 
-    **User's Request:**
+        ## **RESPONSE FORMAT (Mandatory Structured JSON)**
 
-"""
+        You MUST always return a JSON object with the following fields:
+
+        ```json
+        {
+        "found": true/false,
+        "object_location_in_image": {
+            "description": "Describe where the object appears in the image, or null if not present",
+            "Detailed area description": "split image into 4 parts: left top, right top, left bottom, right bottom. Describe where the object appears in each part, or null if not present",
+        },
+        "distance_and_direction_from_camera": {
+            "distance_inches": float or null,
+            "direction": "in front / left / right / slightly left / slightly right / above waist / below waist"
+        },
+        "navigation_instructions": [
+            "Step-by-step instructions from the user's current facing direction to approach the object.",
+            "Only reference stable, touchable landmarks (table, chair, sofa, wall, counter, etc.).",
+            "Flag obstacles in the path."
+        ],
+        "hand_guidance": "Describe how to position and move the user's hand to grab the object.",
+        "fallback": "If object not found or image unclear, ask user to take another photo and suggest how to reposition."
+        }
+        **User's Request:**
+    """
     return context_prompt + prompt
 
 def save_results_to_csv(
@@ -334,15 +384,26 @@ def save_results_to_csv(
     
     # Write results to CSV
     with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['prompt_id', 'prompt_text', 'image_name', 'model_name', 'llm_response']
+        fieldnames = [
+            'prompt_id', 'prompt_text', 'image_name', 'object',
+            'object_distance', 'object_direction', 'scene', 'object_bbox',
+            'annotation', 'depth_image', 'model_name', 'llm_response'
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
+
         writer.writeheader()
         for result in results:
             writer.writerow({
                 'prompt_id': result.prompt_id,
                 'prompt_text': result.prompt_text,
                 'image_name': result.image_name,
+                'object': result.object,
+                'object_distance': result.object_distance,
+                'object_direction': result.object_direction,
+                'scene': result.scene,
+                'object_bbox': result.object_bbox,
+                'annotation': result.annotation,
+                'depth_image': result.depth_image,
                 'model_name': result.model_name,
                 'llm_response': result.response
             })
@@ -417,7 +478,15 @@ def eval(
                     prompt_text=query.prompt_text,
                     image_name=query.image_name,
                     model_name=model_name,
-                    response=response
+                    response=response,
+                    # Include all additional fields from query
+                    object=query.object,
+                    object_distance=query.object_distance,
+                    object_direction=query.object_direction,
+                    scene=query.scene,
+                    object_bbox=query.object_bbox,
+                    annotation=query.annotation,
+                    depth_image=query.depth_image
                 )
                 results.append(result)
             model_responses[model_name] = responses
@@ -461,13 +530,20 @@ def main():
     FULL_PARAMS_PROCESSOR = "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor"
     LORA_PROCESSOR = "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor"
     
+    # model_processor_name_dict = {
+    #     # TODO: change here
+    #     "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen/Qwen2.5-VL-3B-Instruct",
+    #     "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
+    #     "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
+    # }
+
+    # only use base to test evaluation
     model_processor_name_dict = {
         # TODO: change here
         "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen/Qwen2.5-VL-3B-Instruct",
-        "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
-        "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
+        # "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
+        # "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
     }
-    
     # Run evaluation
     results = eval(
         model_processor_name_dict=model_processor_name_dict,

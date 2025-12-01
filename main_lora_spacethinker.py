@@ -129,7 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("--image", "-i", type=str)
     parser.add_argument("--question", "-q", type=str)
     args = parser.parse_args()
-    # example: python main_lora.py --model=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-1 --processor=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
+    # example: python main_lora_spacethinker.py --model=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1 --processor=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
     
     train = args.train
     model_path = args.model

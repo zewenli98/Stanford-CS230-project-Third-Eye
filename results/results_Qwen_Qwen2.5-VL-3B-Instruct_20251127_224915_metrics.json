@@ -1,0 +1,42 @@
+{
+  "total_samples": 1,
+  "average_scores": {
+    "found": 5.0,
+    "object_location_description": 0.0,
+    "object_location_detailed_area": 2.0,
+    "distance": 0.0,
+    "direction": 1.0,
+    "navigation_instructions": 2.0,
+    "hand_guidance": 3.0,
+    "fallback": 5.0,
+    "total": 18.0
+  },
+  "max_possible_scores": {
+    "found": 5,
+    "object_location_description": 5,
+    "object_location_detailed_area": 5,
+    "distance": 5,
+    "direction": 5,
+    "navigation_instructions": 5,
+    "hand_guidance": 5,
+    "fallback": 5
+  },
+  "total_max_possible": 40,
+  "overall_percentage": 45.0,
+  "individual_metrics": [
+    {
+      "prompt_id": 1,
+      "image_name": "0001_002599_2014-06-24_14-26-41_094959634447_rgbf000065-resize.jpg",
+      "found": 5,
+      "object_location_description": 0,
+      "object_location_detailed_area": 2,
+      "distance": 0,
+      "direction": 1,
+      "navigation_instructions": 2,
+      "hand_guidance": 3,
+      "fallback": 5,
+      "total_score": 18,
+      "max_possible_score": 40
+    }
+  ]
+}
