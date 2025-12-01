@@ -19,7 +19,7 @@ from peft import PeftModel
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-BASE_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+BASE_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 # Data classes for better type management
 @dataclass
@@ -527,23 +527,28 @@ def eval(
     return output_paths
 
 def main():
-    FULL_PARAMS_PROCESSOR = "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor"
-    LORA_PROCESSOR = "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor"
+    FULL_PARAMS_OPENSPACES_PROCESSOR = "./finetuned_models/full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/processor"
+    FULL_PARAMS_SPACETHINKER_PROCESSOR = "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor"
+    LORA_OPENSPACES_PROCESSOR = "./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/processor"
+    LORA_SPACETHINKER_PROCESSOR = "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor"
     
-    # model_processor_name_dict = {
-    #     # TODO: change here
-    #     "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen/Qwen2.5-VL-3B-Instruct",
-    #     "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
-    #     "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
-    # }
-
-    # only use base to test evaluation
     model_processor_name_dict = {
         # TODO: change here
-        "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen/Qwen2.5-VL-3B-Instruct",
-        # "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": FULL_PARAMS_PROCESSOR,
-        # "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1": LORA_PROCESSOR,
+        "Qwen/Qwen2.5-VL-7B-Instruct": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "./finetuned_models/full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/epoch-1": FULL_PARAMS_OPENSPACES_PROCESSOR,
+        "./finetuned_models/full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/epoch-2": FULL_PARAMS_OPENSPACES_PROCESSOR,
+        "./finetuned_models/full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/epoch-3": FULL_PARAMS_OPENSPACES_PROCESSOR,
+        "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-1": FULL_PARAMS_SPACETHINKER_PROCESSOR,
+        "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-2": FULL_PARAMS_SPACETHINKER_PROCESSOR,
+        "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-3": FULL_PARAMS_SPACETHINKER_PROCESSOR,
+        "./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/epoch-1": LORA_OPENSPACES_PROCESSOR,
+        "./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/epoch-2": LORA_OPENSPACES_PROCESSOR,
+        "./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/epoch-3": LORA_OPENSPACES_PROCESSOR,
+        "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-1": LORA_SPACETHINKER_PROCESSOR,
+        "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-2": LORA_SPACETHINKER_PROCESSOR,
+        "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-3": LORA_SPACETHINKER_PROCESSOR,
     }
+
     # Run evaluation
     results = eval(
         model_processor_name_dict=model_processor_name_dict,
