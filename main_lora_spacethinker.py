@@ -7,13 +7,15 @@ import lightning as L
 from torch.optim import AdamW
 from peft import PeftModel
 import argparse
+from lightning.pytorch.loggers import CSVLogger
 
 
-BASE_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+BASE_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 DATASET = "remyxai/SpaceThinker"
 EPOCHS = 5
 BS = 32
 SAVE_DIR = f"./finetuned_models/LoRA-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
+LOG_DIR = f"./LoRA-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
 
 
 class SpaceThinkerDataset(torch.utils.data.Dataset):
@@ -127,7 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("--image", "-i", type=str)
     parser.add_argument("--question", "-q", type=str)
     args = parser.parse_args()
-    # example: python main_lora.py --model=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1 --processor=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
+    # example: python main_lora.py --model=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-1 --processor=./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
     
     train = args.train
     model_path = args.model
@@ -145,10 +147,25 @@ if __name__ == "__main__":
     lora_model = get_peft_model(base_model, lora_config).cuda()
 
     if train:
+        lora_model.train()
+        lora_model.gradient_checkpointing_enable()
+        lora_model.config.use_cache = False
+        if hasattr(lora_model, "enable_input_require_grads"):
+            lora_model.enable_input_require_grads()
         processor = AutoProcessor.from_pretrained(BASE_MODEL, trust_remote_code=True)
         train_dataset = SpaceThinkerDataset("train")
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BS, shuffle=True, collate_fn=collate_fn)
-        trainer = L.Trainer(max_epochs=EPOCHS, devices=1, accelerator="auto")
+        
+        logger = CSVLogger(save_dir="./logs", name=LOG_DIR)
+        
+        trainer = L.Trainer(
+            max_epochs=EPOCHS, 
+            devices=-1, 
+            accelerator="auto", 
+            precision="bf16-mixed",
+            logger=logger,
+            log_every_n_steps=1,
+        )
         trainer.fit(QwenTrainer(lora_model, processor), train_loader)
         # merged = lora_model.merge_and_unload()  # returns a plain HF model
         # merged.save_pretrained(SAVE_DIR)

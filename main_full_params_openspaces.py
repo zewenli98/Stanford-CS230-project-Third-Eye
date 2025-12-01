@@ -5,13 +5,15 @@ from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 import lightning as L
 from torch.optim import AdamW
 import argparse
+from lightning.pytorch.loggers import CSVLogger
 
 
-BASE_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+BASE_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 DATASET = "remyxai/OpenSpaces_MC_R1"
-EPOCHS = 3
+EPOCHS = 5
 BS = 32
 SAVE_DIR = f"./finetuned_models/full_params-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
+LOG_DIR = f"./full_params-{DATASET.split('/')[-1]}-{BASE_MODEL.split('/')[-1]}"
 
 
 class OpenSpaces_MC_R1Dataset(torch.utils.data.Dataset):
@@ -115,7 +117,7 @@ if __name__ == "__main__":
     parser.add_argument("--image", "-i", type=str)
     parser.add_argument("--question", "-q", type=str)
     args = parser.parse_args()
-    # example: python main_full_params.py --model=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/epoch-1 --processor=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-3B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
+    # example: python main_full_params.py --model=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-1 --processor=./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor --image=./test_img1.jpg --question="I'm blind and holding the camera in my hand. How to reach the cup on the table? Please give a consise and quantitative answer."
     
     train = args.train
     model_path = args.model
@@ -138,7 +140,18 @@ if __name__ == "__main__":
         processor = AutoProcessor.from_pretrained(BASE_MODEL, trust_remote_code=True)
         train_dataset = OpenSpaces_MC_R1Dataset("train")
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BS, shuffle=True, collate_fn=collate_fn)
-        trainer = L.Trainer(max_epochs=EPOCHS, devices=1, accelerator="auto", precision="bf16-mixed", accumulate_grad_batches=2)
+        
+        logger = CSVLogger(save_dir="./logs", name=LOG_DIR)
+        
+        trainer = L.Trainer(
+            max_epochs=EPOCHS, 
+            devices=1, 
+            accelerator="auto", 
+            precision="bf16-mixed", 
+            accumulate_grad_batches=2,
+            logger=logger,
+            log_every_n_steps=1,
+        )
         trainer.fit(QwenTrainer(model, processor), train_loader)
         processor.save_pretrained(f"{SAVE_DIR}/processor")
 
