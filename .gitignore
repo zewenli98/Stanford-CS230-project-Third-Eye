@@ -211,5 +211,6 @@ __marimo__/
 
 # Test Data
 SUNRGBD/
+SUNRGBD.zip
 .DS_Store
 .claude/
