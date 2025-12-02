@@ -11,14 +11,6 @@ from pathlib import Path
 import subprocess
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('./Agents/logs/pipeline.log'),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +24,7 @@ class Pipeline:
         Args:
             config_path: Path to configuration file
         """
-        self.config_path = config_path or './Agents/configs/training_config.yaml'
+        self.config_path = config_path or './configs/training_config.yaml'
         self.base_dir = Path(__file__).parent
 
     def run_command(self, command: list, description: str):
@@ -230,7 +222,7 @@ Examples:
     parser.add_argument(
         '--config',
         type=str,
-        default='./Agents/configs/training_config.yaml',
+        default='./configs/training_config.yaml',
         help='Path to configuration file'
     )
     parser.add_argument(

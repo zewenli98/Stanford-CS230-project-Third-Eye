@@ -12,12 +12,14 @@ import yaml
 from datetime import datetime
 import json
 import shutil
-
+import torch
+print("CUDA available:", torch.cuda.is_available())
+print("PyTorch CUDA version:", torch.version.cuda)
+print(torch.cuda.get_device_name(0))  # should print NVIDIA A10G
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
 from ultralytics import YOLO
-from ultralytics.utils.callbacks import Callbacks
 from configs.config import Config
 
 # Configure logging
@@ -25,7 +27,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('./Agents/logs/training.log'),
+        logging.FileHandler('../Agents/logs/training.log'),
         logging.StreamHandler()
     ]
 )
@@ -152,7 +154,6 @@ class YOLOTrainer:
         plots = self.config.get('logging.plots')
 
         # Validation parameters
-        val_period = self.config.get('validation.val_period')
         save_period = self.config.get('checkpointing.save_period')
 
         logger.info("Starting training with configuration:")
@@ -213,7 +214,6 @@ class YOLOTrainer:
 
                 # Validation
                 val=True,
-                val_period=val_period,
 
                 # Resume
                 resume=False,
@@ -330,7 +330,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='./Agents/configs/training_config.yaml',
+        default='../configs/training_config.yaml',
         help='Path to training configuration file'
     )
     parser.add_argument(

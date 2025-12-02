@@ -401,7 +401,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='./Agents/configs/training_config.yaml',
+        default='./configs/training_config.yaml',
         help='Path to configuration file'
     )
     parser.add_argument(

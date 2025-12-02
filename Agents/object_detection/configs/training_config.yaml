@@ -8,7 +8,7 @@ model:
 
 # Dataset Configuration
 data:
-  yaml_path: "./Agents/data_prep/sunrgbd_yolo/sunrgbd.yaml"
+  yaml_path: "../Agents/data_prep/sunrgbd_yolo/sunrgbd.yaml"
   img_size: 640
   cache: false  # Cache images for faster training (requires more RAM)
   augment: true
@@ -77,7 +77,6 @@ logging:
 
 # Validation Configuration
 validation:
-  val_period: 1  # Validate every N epochs
   save_json: true  # Save results to JSON
   save_hybrid: false  # Save hybrid version for both speed and accuracy
   conf_thres: 0.25  # Confidence threshold

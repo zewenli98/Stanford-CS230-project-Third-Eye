@@ -214,3 +214,9 @@ SUNRGBD/
 SUNRGBD.zip
 .DS_Store
 .claude/
+
+# Agents
+Agents/object_detection/training/
+Agents/object_detection/sunrgbd_detection/
+*.pt
+Agents/object_detection/Agents/
