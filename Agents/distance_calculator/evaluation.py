@@ -375,7 +375,7 @@ class DepthEvaluator:
 
         json_path = self.output_dir / 'evaluation_report.json'
         with open(json_path, 'w') as f:
-            json.dump(report, f, indent=2)
+            json.dump(report, f, indent=2, default=lambda o: float(o) if hasattr(o, "item") else str(o))
 
         # Text report
         text_path = self.output_dir / 'evaluation_report.txt'

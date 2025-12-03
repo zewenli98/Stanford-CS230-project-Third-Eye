@@ -268,7 +268,7 @@ class DepthDatasetPreparer:
 
         info_path = self.output_path / 'dataset_info.json'
         with open(info_path, 'w') as f:
-            json.dump(info, f, indent=2)
+            json.dump(info, f, indent=2, default=lambda o: float(o) if hasattr(o, "item") else str(o))
 
         logger.info(f"Dataset info saved to {info_path}")
 
