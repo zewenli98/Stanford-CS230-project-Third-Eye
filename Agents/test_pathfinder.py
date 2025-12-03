@@ -21,8 +21,8 @@ def test_single_query():
     pathfinder = PathFinder(output_dir="./pathfinder_outputs/test1")
 
     # Example query data
-    rgb_path = "./queries/images/0001_002599_2014-06-24_14-26-41_094959634447_rgbf000065-resize.jpg"
-    depth_path = "./queries/images/0001_002599_2014-06-24_14-26-41_094959634447_rgbf000065-resize_depth.png"
+    rgb_path = "../queries/images/0001_002599_2014-06-24_14-26-41_094959634447_rgbf000065-resize.jpg"
+    depth_path = "../queries/images/0001_002599_2014-06-24_14-26-41_094959634447_rgbf000065-resize_depth.png"
     object_name = "Chair"
     bbox_str = "[407, 163, 614, 325]"
 
@@ -39,17 +39,16 @@ def test_single_query():
         print(f"\n✓ Object: {instruction.object_name}")
         print(f"✓ Distance: {instruction.distance_meters} meters")
         print(f"✓ Direction: {instruction.direction_clock} ({instruction.direction_degrees}°)")
-        print(f"✓ Reachable: {'Yes' if instruction.is_reachable else 'No'}")
+        print(f"✓ Fetchable: <isFetchable>{instruction.is_fetchable}</isFetchable>")
 
-        if instruction.reachable_position:
-            print(f"✓ Target Position: ({instruction.reachable_position['x']}, {instruction.reachable_position['y']})")
-
-        if instruction.safe_path:
-            print(f"\n✓ Navigation Path ({len(instruction.safe_path)} steps):")
-            for step in instruction.safe_path[:5]:  # Show first 5 steps
-                print(f"   {step['step']}. {step['action']}")
-            if len(instruction.safe_path) > 5:
-                print(f"   ... and {len(instruction.safe_path) - 5} more steps")
+        if instruction.is_fetchable:
+            print(f"\n✓ Object is within reach! No navigation needed.")
+        elif instruction.waypoints:
+            print(f"\n✓ Navigation Waypoints ({len(instruction.waypoints)} waypoints):")
+            for i, waypoint in enumerate(instruction.waypoints, 1):
+                print(f"   {i}. Direction: {waypoint['direction']}, Distance: {waypoint['distance']}m")
+        else:
+            print(f"\n⚠ No path found to object")
 
         if instruction.warnings:
             print(f"\n⚠ Warnings:")
@@ -89,7 +88,7 @@ def test_batch_processing():
 
     try:
         # Load CSV
-        csv_path = "./queries/prompts.csv"
+        csv_path = "../queries/prompts.csv"
         df = pd.read_csv(csv_path)
         print(f"\n✓ Loaded {len(df)} queries from CSV")
 
@@ -100,17 +99,22 @@ def test_batch_processing():
         results = []
 
         for idx, row in df.head(num_queries).iterrows():
-            rgb_path = f"./queries/images/{row['image_name']}"
-            depth_path = f"./queries/images/{row['depth_image']}"
+            rgb_path = f"../queries/images/{row['image_name']}"
+            depth_path = f"../queries/images/{row['depth_image']}"
 
             print(f"[{idx+1}/{num_queries}] Processing: {row['object']}")
+            print(f"   Ground truth distance from CSV: {row.get('object_distance', 'N/A')}m")
 
             try:
+                # Use annotation data if available (matches prepare_test.py calculation)
+                annotation_json = row.get('annotation', None)
+
                 instruction = pathfinder.process_query(
                     rgb_path=rgb_path,
                     depth_path=depth_path,
                     object_name=row['object'],
-                    bbox_str=row['object_bbox']
+                    bbox_str=row['object_bbox'],
+                    annotation_json=annotation_json
                 )
 
                 # Save results
@@ -122,10 +126,12 @@ def test_batch_processing():
                     'object': row['object'],
                     'distance': instruction.distance_meters,
                     'direction': instruction.direction_clock,
-                    'reachable': instruction.is_reachable
+                    'fetchable': instruction.is_fetchable,
+                    'waypoints': len(instruction.waypoints) if instruction.waypoints else 0
                 })
 
-                print(f"   ✓ Distance: {instruction.distance_meters}m, Direction: {instruction.direction_clock}")
+                fetchable_str = "fetchable" if instruction.is_fetchable else f"{len(instruction.waypoints) if instruction.waypoints else 0} waypoints"
+                print(f"   ✓ Distance: {instruction.distance_meters}m, Direction: {instruction.direction_clock}, {fetchable_str}")
 
             except Exception as e:
                 print(f"   ✗ Error: {e}")
@@ -136,9 +142,9 @@ def test_batch_processing():
         print("-"*80)
 
         for result in results:
-            reachable_str = "✓ Reachable" if result['reachable'] else "✗ Not reachable"
+            fetchable_str = "✓ Fetchable" if result['fetchable'] else f"✗ Not fetchable ({result['waypoints']} waypoints)"
             print(f"Query {result['query_id']}: {result['object']}")
-            print(f"  Distance: {result['distance']}m | Direction: {result['direction']} | {reachable_str}")
+            print(f"  Distance: {result['distance']}m | Direction: {result['direction']} | {fetchable_str}")
 
         print(f"\n✓ Successfully processed {len(results)}/{num_queries} queries")
 
@@ -172,7 +178,7 @@ def test_json_output():
         # Validate required fields
         required_fields = [
             'object_name', 'distance_meters', 'direction_clock',
-            'direction_degrees', 'is_reachable'
+            'direction_degrees', 'is_fetchable'
         ]
 
         print("\n✓ Validating JSON structure...")
@@ -186,11 +192,10 @@ def test_json_output():
                 all_valid = False
 
         # Check optional fields
-        if data.get('reachable_position'):
-            print(f"   ✓ reachable_position: {data['reachable_position']}")
-
-        if data.get('safe_path'):
-            print(f"   ✓ safe_path: {len(data['safe_path'])} steps")
+        if data.get('waypoints'):
+            print(f"   ✓ waypoints: {len(data['waypoints'])} waypoints")
+            if len(data['waypoints']) > 0:
+                print(f"      Example: {data['waypoints'][0]}")
 
         if data.get('warnings'):
             print(f"   ⚠ warnings: {data['warnings']}")

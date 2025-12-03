@@ -1,0 +1,18 @@
+{
+  "object_name": "Chair",
+  "distance_meters": 3.62,
+  "direction_clock": "2 o'clock (right)",
+  "direction_degrees": 11.56,
+  "is_fetchable": false,
+  "waypoints": [
+    {
+      "direction": "1 o'clock",
+      "distance": 1.98
+    },
+    {
+      "direction": "11 o'clock",
+      "distance": 1.22
+    }
+  ],
+  "warnings": null
+}
