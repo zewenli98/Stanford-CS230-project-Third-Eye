@@ -15,15 +15,17 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # HYPERPARAMETERS - Configure these settings
 # ============================================================================
-NUM_SAMPLES = 10  # Number of test samples to generate
-ENTRY_FOLDER = "kv2/kinect2data"  # Specific folder to look into (e.g., "kv2/kinect2data") or None for random selection across all folders
+NUM_SAMPLES = 100  # Number of test samples to generate (excludes negative samples)
+NEGATIVE_SAMPLE_RATIO = 0.2  # Ratio of negative samples (20% = true negatives without target objects)
+ENTRY_FOLDER = None  # Specific folder to look into (e.g., "kv2/kinect2data") or None for random selection across all folders
 SUNRGBD_ROOT = "./SUNRGBD"  # Root directory of SUNRGBD dataset
 OUTPUT_DIR = "./queries"  # Output directory for generated data
 OUTPUT_IMAGES_DIR = "./queries/images"  # Output directory for images
 OUTPUT_CSV = "./queries/prompts.csv"  # Output CSV file path
 
 # Goal objects to search for (only objects from this list will be selected as goals)
-GOAL_OBJECTS = ["cup", "chair", "microwave", "bookcase"]
+GOAL_OBJECTS = ["mug", "chair", "book", "cabinet", "door", "lamp"]
+
 # ============================================================================
 
 
@@ -40,6 +42,17 @@ class SUNRGBDTestDataPreparer:
         - scene.txt: Scene type
         - annotation/index.json: Object annotations
         - intrinsics.txt: Camera intrinsics (3x3 matrix)
+
+    Object Matching Logic:
+    - Uses case-insensitive partial matching for all goal objects
+    - Examples:
+        - "chair" matches: chair, Chair, CHAIR, woodchair, armchair, officechair, chairs
+        - "mug" matches: mug, Mug, MUG, coffeemug
+        - "book" matches: book, Book, BOOK, books, notebook, textbook
+        - "cabinet" matches: cabinet, Cabinet, filecabinet, medicalcabinet
+        - "door" matches: door, Door, glassdoor, wooddoor
+        - "lamp" matches: lamp, Lamp, tablelamp, floorlamp
+    - Preserves original name (e.g., "woodchair") while tracking matched category (e.g., "chair")
     """
 
     def __init__(self, sunrgbd_root: str = "./SUNRGBD"):
@@ -186,21 +199,23 @@ class SUNRGBDTestDataPreparer:
                 intrinsics.append(values)
         return np.array(intrinsics)
 
-    def select_random_goal_object(self, scene_data: Dict, goal_objects: List[str] = None) -> Optional[Dict]:
+    def select_closest_goal_object(self, scene_data: Dict, goal_objects: List[str] = None) -> Optional[Dict]:
         """
-        Randomly select a goal object from scene annotations.
-        Only selects objects that match the goal_objects list.
+        Select the CLOSEST goal object from scene annotations.
+        Only selects objects that match the goal_objects list (case-insensitive, partial matching).
 
         Args:
             scene_data: Scene data dictionary from load_scene_data
-            goal_objects: List of object names to search for (case-insensitive)
+            goal_objects: List of object names to search for (case-insensitive, partial match)
 
         Returns:
             Dictionary containing:
-                - name: object name
+                - name: object name (original, e.g., "woodchair")
+                - matched_category: normalized category (e.g., "chair")
                 - bbox: [x_min, y_min, x_max, y_max] bounding box
                 - polygon: full polygon data
                 - object_index: index in objects list
+                - distance: distance in meters
             Or None if no valid objects found
         """
         annotations = scene_data['annotations']
@@ -228,7 +243,7 @@ class SUNRGBDTestDataPreparer:
             goal_objects_lower = None
 
         # Filter valid polygons (with non-zero XYZ coordinates and matching goal objects)
-        valid_polygons = []
+        valid_objects = []
         for poly in polygons:
             if 'object' in poly and poly['object'] < len(objects):
                 object_idx = poly['object']
@@ -238,74 +253,123 @@ class SUNRGBDTestDataPreparer:
                 if not object_name:
                     continue
 
-                # Check if object is in goal objects list (case-insensitive)
+                # Check if object is in goal objects list (case-insensitive partial matching)
                 if goal_objects_lower:
-                    # Check for partial matches (e.g., "chair" matches "armchair", "officechair")
+                    # Partial matching: "chair" matches "chair", "Chair", "CHAIR", "woodchair", "armchair", etc.
+                    # This handles:
+                    # - Case variations: Chair, CHAIR, chair
+                    # - Compound names: woodchair, officechair, armchair
+                    # - Plural forms: chairs, Chairs, CHAIRS
                     object_name_lower = object_name.lower()
-                    is_goal_object = any(goal_obj in object_name_lower for goal_obj in goal_objects_lower)
+                    matched_category = None
 
-                    if not is_goal_object:
+                    for goal_obj in goal_objects_lower:
+                        if goal_obj in object_name_lower:
+                            matched_category = goal_obj
+                            break
+
+                    if not matched_category:
                         continue
 
-                # Check if polygon has valid XYZ data
-                if 'XYZ' in poly and poly['XYZ']:
-                    # Check if XYZ has non-zero values
-                    xyz_array = np.array(poly['XYZ'])
-                    if xyz_array.size > 0 and not np.allclose(xyz_array, 0):
-                        valid_polygons.append(poly)
+                    # Check if polygon has valid XYZ data
+                    if 'XYZ' in poly and poly['XYZ']:
+                        # Check if XYZ has non-zero values
+                        xyz_array = np.array(poly['XYZ'])
+                        if xyz_array.size > 0 and not np.allclose(xyz_array, 0):
+                            # Calculate distance (average of all XYZ points)
+                            xyz_mean = xyz_array.mean(axis=0)
+                            x_cam, y_cam, z_cam = xyz_mean
+                            distance = np.sqrt(x_cam**2 + y_cam**2 + z_cam**2)
 
-        if not valid_polygons:
+                            # Calculate bounding box from polygon coordinates
+                            x_coords = poly['x']
+                            y_coords = poly['y']
+                            bbox = [
+                                min(x_coords),  # x_min
+                                min(y_coords),  # y_min
+                                max(x_coords),  # x_max
+                                max(y_coords)   # y_max
+                            ]
+
+                            valid_objects.append({
+                                'name': object_name,  # Original name (e.g., "woodchair")
+                                'matched_category': matched_category,  # Normalized (e.g., "chair")
+                                'bbox': bbox,
+                                'polygon': poly,
+                                'object_index': object_idx,
+                                'distance': distance
+                            })
+
+        if not valid_objects:
             if goal_objects:
                 logger.warning(f"No valid objects found matching goal list: {goal_objects}")
             else:
                 logger.warning("No valid polygons with XYZ data found")
             return None
 
-        # Randomly select one polygon
-        selected_polygon = random.choice(valid_polygons)
-        object_idx = selected_polygon['object']
-        object_name = objects[object_idx]['name']
+        # Find the closest object
+        closest_object = min(valid_objects, key=lambda obj: obj['distance'])
 
-        # Calculate bounding box from polygon coordinates
-        x_coords = selected_polygon['x']
-        y_coords = selected_polygon['y']
-        bbox = [
-            min(x_coords),  # x_min
-            min(y_coords),  # y_min
-            max(x_coords),  # x_max
-            max(y_coords)   # y_max
-        ]
+        logger.info(f"Found closest target object: {closest_object['name']} at {closest_object['distance']:.2f}m")
+        if closest_object['name'].lower() != closest_object['matched_category']:
+            logger.debug(f"  '{closest_object['name']}' → matched as '{closest_object['matched_category']}'")
 
-        return {
-            'name': object_name,
-            'bbox': bbox,
-            'polygon': selected_polygon,
-            'object_index': object_idx
-        }
+        return closest_object
+
+    def calculate_clock_direction(self, x_cam: float, z_cam: float) -> str:
+        """
+        Calculate clock-wise direction based on object's position relative to camera.
+        Uses 2D plane (x-z) to determine angle.
+
+        12 o'clock = straight ahead (z+)
+        3 o'clock = right (x+)
+        6 o'clock = behind (z-)
+        9 o'clock = left (x-)
+
+        Args:
+            x_cam: X coordinate in camera frame (positive = right)
+            z_cam: Z coordinate in camera frame (positive = forward)
+
+        Returns:
+            Clock direction string (e.g., "2 o'clock", "11 o'clock")
+        """
+        # Calculate angle from camera forward direction
+        # atan2(x, z) gives angle from forward axis (z+)
+        angle_rad = np.arctan2(x_cam, z_cam)
+        angle_deg = np.degrees(angle_rad)
+
+        # Convert to 0-360 range (0° = forward/12 o'clock, clockwise positive)
+        angle_deg = (90 - angle_deg) % 360
+
+        # Convert to clock hours (30° per hour)
+        clock_hour = int(round(angle_deg / 30)) % 12
+        if clock_hour == 0:
+            clock_hour = 12
+
+        return f"{clock_hour} o'clock"
 
     def calculate_object_position(self,
                                   goal_object: Dict,
                                   scene_data: Dict) -> Dict:
         """
-        Calculate distance and direction from camera to goal object.
+        Calculate distance and clock-wise direction from camera to goal object.
 
-        Uses the XYZ coordinates from annotations and depth image for verification.
+        Uses the XYZ coordinates from annotations.
 
         Args:
-            goal_object: Goal object dictionary from select_random_goal_object
+            goal_object: Goal object dictionary from select_all_goal_objects
             scene_data: Scene data dictionary from load_scene_data
 
         Returns:
             Dictionary containing:
                 - distance_meters: Average distance in meters
                 - distance_feet: Distance in feet
-                - direction: Direction description (left/right/center, up/down/middle)
+                - direction: Clock-wise direction (e.g., "2 o'clock", "11 o'clock")
                 - center_3d: [x, y, z] center position in camera coordinates
                 - bbox_center_2d: [u, v] center in image coordinates
         """
         polygon = goal_object['polygon']
         xyz_coords = np.array(polygon['XYZ'])  # List of [x, y, z] points
-        depth = scene_data['depth']
         image_width, image_height = scene_data['image'].size
 
         # Calculate 3D center position
@@ -321,54 +385,27 @@ class SUNRGBDTestDataPreparer:
         bbox_center_u = (bbox[0] + bbox[2]) / 2
         bbox_center_v = (bbox[1] + bbox[3]) / 2
 
-        # Determine horizontal direction (left/right/center)
-        horizontal_ratio = bbox_center_u / image_width
-        if horizontal_ratio < 0.33:
-            horizontal_dir = "left"
-        elif horizontal_ratio > 0.67:
-            horizontal_dir = "right"
-        else:
-            horizontal_dir = "center"
-
-        # Determine vertical direction (up/down/middle)
-        vertical_ratio = bbox_center_v / image_height
-        if vertical_ratio < 0.33:
-            vertical_dir = "above"
-        elif vertical_ratio > 0.67:
-            vertical_dir = "below"
-        else:
-            vertical_dir = "middle"
-
-        # Combine direction
-        if vertical_dir == "middle":
-            direction = horizontal_dir
-        else:
-            direction = f"{vertical_dir} and {horizontal_dir}"
-
-        # Also use x_cam for more precise left/right determination
-        if x_cam < -0.5:
-            direction += " (camera-left)"
-        elif x_cam > 0.5:
-            direction += " (camera-right)"
+        # Calculate clock-wise direction
+        direction = self.calculate_clock_direction(x_cam, z_cam)
 
         return {
             'distance_meters': distance_meters,
             'distance_feet': distance_feet,
             'direction': direction,
             'center_3d': center_3d.tolist(),
-            'bbox_center_2d': [bbox_center_u, bbox_center_v],
-            'horizontal_direction': horizontal_dir,
-            'vertical_direction': vertical_dir
+            'bbox_center_2d': [bbox_center_u, bbox_center_v]
         }
 
-    def prepare_test_sample(self, entry_folder: Optional[str] = None, goal_objects: List[str] = None) -> Optional[Dict]:
+    def prepare_test_sample(self, entry_folder: Optional[str] = None, goal_objects: List[str] = None,
+                           target_category: str = None) -> Optional[Dict]:
         """
-        Prepare a complete test sample from SUNRGBD dataset.
+        Prepare a complete test sample from SUNRGBD dataset with the CLOSEST target object.
 
         Args:
             entry_folder: Specific entry folder (e.g., "kv2/kinect2data"),
                          or None to randomly select across all folders
             goal_objects: List of object names to search for (case-insensitive)
+            target_category: Preferred category to balance sampling (optional)
 
         Returns:
             Dictionary containing complete test sample:
@@ -376,8 +413,12 @@ class SUNRGBDTestDataPreparer:
                 - scene_type: Scene description
                 - image: PIL Image
                 - image_path: Path to image file
-                - goal_object: Object information (name, bbox)
-                - position: Distance and direction information
+                - object_name: Object name (original, e.g., "woodchair")
+                - object_category: Object category (normalized, e.g., "chair")
+                - object_bbox: Bounding box [x_min, y_min, x_max, y_max]
+                - distance_meters: Distance in meters
+                - distance_feet: Distance in feet
+                - direction: Clock direction (e.g., "2 o'clock")
             Or None if no valid sample could be prepared
         """
         # Get all scene folders
@@ -387,26 +428,38 @@ class SUNRGBDTestDataPreparer:
             logger.error("No valid scene folders found")
             return None
 
-        # Try up to 10 random scenes to find one with valid objects
-        max_attempts = 10
+        # Try up to 100 random scenes to find one with valid objects
+        # Increased from 20 to handle category balancing better
+        max_attempts = 100
+        category_fallback_threshold = 50  # After 50 attempts, relax category requirement
+
         for attempt in range(max_attempts):
             # Randomly select a scene folder
             scene_folder = random.choice(scene_folders)
-            logger.info(f"Attempt {attempt + 1}: Selected scene folder: {scene_folder}")
+            logger.debug(f"Attempt {attempt + 1}: Selected scene folder: {scene_folder.name}")
 
             try:
                 # Load scene data
                 scene_data = self.load_scene_data(scene_folder)
 
-                # Select random goal object
-                goal_object = self.select_random_goal_object(scene_data, goal_objects)
+                # Select the CLOSEST goal object
+                closest_object = self.select_closest_goal_object(scene_data, goal_objects)
 
-                if goal_object is None:
-                    logger.warning(f"No valid objects in scene, trying another...")
+                if closest_object is None:
+                    logger.debug(f"No valid objects in scene, trying another...")
                     continue
 
-                # Calculate object position
-                position = self.calculate_object_position(goal_object, scene_data)
+                # If target_category specified, prefer scenes with that category
+                # But after many attempts, accept any valid scene
+                if target_category and attempt < category_fallback_threshold:
+                    if closest_object.get('matched_category', '').lower() != target_category.lower():
+                        logger.debug(f"Scene doesn't contain preferred category '{target_category}', trying another...")
+                        continue
+                elif target_category and attempt >= category_fallback_threshold:
+                    logger.info(f"Relaxing category requirement after {category_fallback_threshold} attempts")
+
+                # Calculate detailed position for the closest object
+                position = self.calculate_object_position(closest_object, scene_data)
 
                 # Prepare final test sample
                 test_sample = {
@@ -414,53 +467,146 @@ class SUNRGBDTestDataPreparer:
                     'scene_type': scene_data['scene_type'],
                     'image': scene_data['image'],
                     'image_path': str(scene_data['image_path']),
-                    'goal_object': {
-                        'name': goal_object['name'],
-                        'bbox': goal_object['bbox'],
-                        'object_index': goal_object['object_index']
-                    },
-                    'position': position,
+                    'object_name': closest_object['name'],  # Original name (e.g., "woodchair")
+                    'object_category': closest_object.get('matched_category', closest_object['name'].lower()),  # Normalized (e.g., "chair")
+                    'object_bbox': closest_object['bbox'],
+                    'object_index': closest_object['object_index'],
+                    'distance_meters': position['distance_meters'],
+                    'distance_feet': position['distance_feet'],
+                    'direction': position['direction'],
+                    'center_3d': position['center_3d'],
+                    'bbox_center_2d': position['bbox_center_2d'],
                     'full_annotation': scene_data['annotations']  # Include full annotation
                 }
 
-                logger.info(f"Successfully prepared test sample:")
-                logger.info(f"  Scene: {scene_data['scene_type']}")
-                logger.info(f"  Goal object: {goal_object['name']}")
-                logger.info(f"  Distance: {position['distance_meters']:.2f}m ({position['distance_feet']:.2f}ft)")
-                logger.info(f"  Direction: {position['direction']}")
+                logger.info(f"✓ Sample prepared: {closest_object['name']} at {position['distance_meters']:.2f}m, {position['direction']} in {scene_data['scene_type']}")
+                if closest_object['name'].lower() != closest_object.get('matched_category', ''):
+                    logger.debug(f"  '{closest_object['name']}' → matched as '{closest_object['matched_category']}'")
 
                 return test_sample
 
             except Exception as e:
-                logger.warning(f"Error processing scene {scene_folder}: {e}")
+                logger.debug(f"Error processing scene {scene_folder.name}: {e}")
                 continue
 
-        logger.error(f"Failed to prepare test sample after {max_attempts} attempts")
+        logger.error(f"✗ Failed to prepare test sample after {max_attempts} attempts")
+        logger.error(f"  Target category: {target_category}")
+        logger.error(f"  Try: 1) Check if SUNRGBD dataset has these objects, 2) Reduce NUM_SAMPLES")
+        return None
+
+    def prepare_negative_sample(self, entry_folder: Optional[str] = None, goal_objects: List[str] = None) -> Optional[Dict]:
+        """
+        Prepare a negative test sample (image without target objects).
+
+        Args:
+            entry_folder: Specific entry folder or None for random selection
+            goal_objects: List of object names (pick one as fake target)
+
+        Returns:
+            Dictionary with empty object list
+        """
+        scene_folders = self.get_all_scene_folders(entry_folder)
+        if not scene_folders:
+            return None
+
+        max_attempts = 20
+        for attempt in range(max_attempts):
+            scene_folder = random.choice(scene_folders)
+
+            try:
+                scene_data = self.load_scene_data(scene_folder)
+
+                # Check that scene has NO target objects
+                goal_objects_list = self.select_all_goal_objects(scene_data, goal_objects, max_objects=1000)
+
+                # Only use scenes with NO target objects
+                if goal_objects_list is not None and len(goal_objects_list) > 0:
+                    continue
+
+                # Pick a random goal object name (fake target)
+                fake_target = random.choice(goal_objects) if goal_objects else "object"
+
+                # Create negative sample
+                test_sample = {
+                    'scene_folder': str(scene_folder),
+                    'scene_type': scene_data['scene_type'],
+                    'image': scene_data['image'],
+                    'image_path': str(scene_data['image_path']),
+                    'goal_objects': [],  # Empty - no objects found
+                    'primary_object': fake_target,  # Fake target
+                    'full_annotation': scene_data['annotations'],
+                    'is_negative': True  # Flag as negative sample
+                }
+
+                logger.info(f"Successfully prepared negative sample (no {fake_target} found)")
+                return test_sample
+
+            except Exception as e:
+                logger.warning(f"Error processing negative sample: {e}")
+                continue
+
+        logger.warning("Failed to prepare negative sample")
         return None
 
     def prepare_multiple_test_samples(self,
                                      n_samples: int = 10,
                                      entry_folder: Optional[str] = None,
-                                     goal_objects: List[str] = None) -> List[Dict]:
+                                     goal_objects: List[str] = None,
+                                     negative_ratio: float = 0.2) -> List[Dict]:
         """
-        Prepare multiple test samples.
+        Prepare multiple test samples with balanced categories and negative samples.
 
         Args:
-            n_samples: Number of test samples to prepare
+            n_samples: Number of positive test samples to prepare
             entry_folder: Specific entry folder or None for random selection
             goal_objects: List of object names to search for (case-insensitive)
+            negative_ratio: Ratio of negative samples (default 0.2 = 20%)
 
         Returns:
-            List of test sample dictionaries
+            List of test sample dictionaries (positive + negative)
         """
+        # Calculate number of negative samples
+        num_negatives = int(n_samples * negative_ratio)
+        num_positives = n_samples
+
+        logger.info(f"Target: {num_positives} positive samples + {num_negatives} negative samples")
+
+        # Track category counts for balancing
+        category_counts = {obj: 0 for obj in (goal_objects or [])}
+
         samples = []
-        for i in range(n_samples):
-            logger.info(f"\nPreparing test sample {i + 1}/{n_samples}")
-            sample = self.prepare_test_sample(entry_folder, goal_objects)
+
+        # Generate positive samples with balanced categories
+        for i in range(num_positives):
+            logger.info(f"\nPreparing positive sample {i + 1}/{num_positives}")
+
+            # Find category with minimum count (for balancing)
+            if goal_objects:
+                target_category = min(category_counts, key=category_counts.get)
+                logger.info(f"  Targeting category: {target_category} (current count: {category_counts[target_category]})")
+            else:
+                target_category = None
+
+            sample = self.prepare_test_sample(entry_folder, goal_objects, target_category)
+
             if sample:
                 samples.append(sample)
+                # Update category count using normalized category
+                object_category = sample.get('object_category', sample['object_name'].lower())
+                if object_category in category_counts:
+                    category_counts[object_category] += 1
 
-        logger.info(f"\nSuccessfully prepared {len(samples)}/{n_samples} test samples")
+        logger.info(f"\nSuccessfully prepared {len(samples)}/{num_positives} positive samples")
+        logger.info(f"Category distribution: {category_counts}")
+
+        # Generate negative samples
+        for i in range(num_negatives):
+            logger.info(f"\nPreparing negative sample {i + 1}/{num_negatives}")
+            neg_sample = self.prepare_negative_sample(entry_folder, goal_objects)
+            if neg_sample:
+                samples.append(neg_sample)
+
+        logger.info(f"\nTotal samples prepared: {len(samples)} ({len(samples)-num_negatives} positive + {len([s for s in samples if s.get('is_negative', False)])} negative)")
         return samples
 
     def save_test_sample(self, test_sample: Dict, output_dir: str = "./test_samples"):
@@ -515,13 +661,14 @@ class SUNRGBDTestDataPreparer:
             - prompt_id: Unique identifier for each prompt
             - prompt_text: Query text in format "where is {object name}"
             - image_name: Filename of the RGB image
-            - object: Object name
-            - object_distance: Distance of object to camera (in meters)
-            - object_direction: Direction of object relative to camera
+            - object: Object name (query target)
+            - object_bbox: Bounding box [x_min, y_min, x_max, y_max] (JSON array) - empty for negatives
+            - object_distance: Distance in meters (string) - empty for negatives
+            - object_direction: Direction (e.g., "2 o'clock") - empty for negatives
             - scene: Scene type
-            - object_bbox: Bounding box in format [x_min, y_min, x_max, y_max]
             - annotation: Full annotation JSON as string
             - depth_image: Filename of the depth image
+            - is_negative: Whether this is a negative sample (true/false)
         """
         # Create output directories
         output_csv_path = Path(output_csv)
@@ -547,7 +694,7 @@ class SUNRGBDTestDataPreparer:
 
         for idx, sample in enumerate(samples, start=1):
             prompt_id = idx
-            object_name = sample['goal_object']['name']
+            object_name = sample.get('object_name', sample.get('primary_object', 'object'))
             prompt_text = f"where is {object_name}"
 
             # Generate unique image filenames
@@ -570,22 +717,39 @@ class SUNRGBDTestDataPreparer:
                 logger.warning(f"No depth image found for sample {prompt_id}")
                 depth_image_filename = ""
 
+            # Check if negative sample
+            is_negative = sample.get('is_negative', False)
+
+            # Prepare object data (empty for negative samples)
+            if is_negative:
+                bbox_json = "[]"
+                distance_str = ""
+                direction_str = ""
+            else:
+                bbox_json = json.dumps(sample.get('object_bbox', []))
+                distance_str = f"{sample.get('distance_meters', 0):.2f}"
+                direction_str = sample.get('direction', '')
+
             # Prepare row data
             row = {
                 'prompt_id': prompt_id,
                 'prompt_text': prompt_text,
                 'image_name': image_filename,
                 'object': object_name,
-                'object_distance': f"{sample['position']['distance_meters']:.2f}",
-                'object_direction': sample['position']['direction'],
+                'object_bbox': bbox_json,
+                'object_distance': distance_str,
+                'object_direction': direction_str,
                 'scene': sample['scene_type'],
-                'object_bbox': json.dumps(sample['goal_object']['bbox']),
                 'annotation': json.dumps(sample.get('full_annotation', {})),
-                'depth_image': depth_image_filename
+                'depth_image': depth_image_filename,
+                'is_negative': str(is_negative).lower()
             }
             csv_rows.append(row)
 
-            logger.info(f"  [{prompt_id:04d}] {prompt_text} - {sample['scene_type']}")
+            if is_negative:
+                logger.info(f"  [{prompt_id:04d}] {prompt_text} - NEGATIVE - {sample['scene_type']}")
+            else:
+                logger.info(f"  [{prompt_id:04d}] {prompt_text} - {distance_str}m, {direction_str} - {sample['scene_type']}")
 
         # Write CSV file
         fieldnames = [
@@ -593,12 +757,13 @@ class SUNRGBDTestDataPreparer:
             'prompt_text',
             'image_name',
             'object',
+            'object_bbox',
             'object_distance',
             'object_direction',
             'scene',
-            'object_bbox',
             'annotation',
-            'depth_image'
+            'depth_image',
+            'is_negative'
         ]
 
         with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
@@ -645,7 +810,8 @@ def main():
     samples = preparer.prepare_multiple_test_samples(
         n_samples=NUM_SAMPLES,
         entry_folder=ENTRY_FOLDER,
-        goal_objects=GOAL_OBJECTS
+        goal_objects=GOAL_OBJECTS,
+        negative_ratio=NEGATIVE_SAMPLE_RATIO
     )
 
     if not samples:
