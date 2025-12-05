@@ -8,7 +8,7 @@ model:
 
 # Dataset Configuration
 data:
-  yaml_path: "../Agents/data_prep/sunrgbd_yolo/sunrgbd.yaml"
+  yaml_path: "./data/sunrgbd_6classes/sunrgbd_6classes.yaml"  # Updated for 6-class filtered dataset
   img_size: 640
   cache: false  # Cache images for faster training (requires more RAM)
   augment: true
@@ -67,8 +67,8 @@ hardware:
 
 # Logging Configuration
 logging:
-  project: "sunrgbd_detection"
-  name: "yolov8s_experiment"
+  project: "sunrgbd_6classes_detection"  # Updated for 6-class dataset
+  name: "yolov8s_6classes"  # Updated experiment name
   wandb: false  # Enable Weights & Biases logging
   tensorboard: true  # Enable TensorBoard logging
   save_dir: "./Agents/models"

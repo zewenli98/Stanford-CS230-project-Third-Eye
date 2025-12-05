@@ -1,19 +1,21 @@
 """
-SUN RGB-D Dataset Parser
+SUN RGB-D Dataset Parser - Filtered for 6 Target Classes
 Converts SUN RGB-D annotations to YOLO format for object detection training.
+Only includes: Mug, Book, Cabinet, Door, Chair, Lamp
 """
 
 import os
 import json
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Set
 import logging
 from tqdm import tqdm
 import shutil
 import scipy.io as sio
 from PIL import Image
 import cv2
+from collections import Counter
 
 # Configure logging
 logging.basicConfig(
@@ -22,9 +24,71 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Target classes - case insensitive matching
+TARGET_CLASSES = {
+    'mug': 'mug',
+    'book': 'book',
+    'cabinet': 'cabinet',
+    'door': 'door',
+    'chair': 'chair',
+    'lamp': 'lamp'
+}
+
+# Variations to normalize (lowercase keys)
+CLASS_VARIATIONS = {
+    # Mug variations
+    'mug': 'mug',
+    'Mug': 'mug',
+    'MUG': 'mug',
+    'cup': 'mug',  # Cup can be considered as mug
+    'Cup': 'mug',
+    'CUP': 'mug',
+
+    # Book variations
+    'book': 'book',
+    'Book': 'book',
+    'BOOK': 'book',
+    'books': 'book',
+    'Books': 'book',
+    'BOOKS': 'book',
+
+    # Cabinet variations
+    'cabinet': 'cabinet',
+    'Cabinet': 'cabinet',
+    'CABINET': 'cabinet',
+    'cabinets': 'cabinet',
+    'Cabinets': 'cabinet',
+    'cupboard': 'cabinet',
+    'Cupboard': 'cabinet',
+    'cubboard': 'cabinet',
+
+    # Door variations
+    'door': 'door',
+    'Door': 'door',
+    'DOOR': 'door',
+    'glassdoor': 'door',
+    'cabinetdoor': 'door',
+
+    # Chair variations
+    'chair': 'chair',
+    'Chair': 'chair',
+    'CHAIR': 'chair',
+    'chairs': 'chair',
+    'Chairs': 'chair',
+    'officechair': 'chair',
+    'armchair': 'chair',
+    'Armchair': 'chair',
+
+    # Lamp variations
+    'lamp': 'lamp',
+    'Lamp': 'lamp',
+    'LAMP': 'lamp',
+    'tablelamp': 'lamp',
+}
+
 
 class SUNRGBDParser:
-    """Parser for SUN RGB-D dataset to YOLO format."""
+    """Parser for SUN RGB-D dataset to YOLO format - Filtered for 6 target classes."""
 
     def __init__(self, sunrgbd_path: str, output_path: str):
         """
@@ -36,8 +100,24 @@ class SUNRGBDParser:
         """
         self.sunrgbd_path = Path(sunrgbd_path)
         self.output_path = Path(output_path)
-        self.class_names = set()
-        self.class_to_idx = {}
+
+        # Only use target classes
+        self.target_classes = TARGET_CLASSES
+        self.class_variations = CLASS_VARIATIONS
+
+        # Class to index mapping (0-indexed for YOLO)
+        self.class_to_idx = {
+            'mug': 0,
+            'book': 1,
+            'cabinet': 2,
+            'door': 3,
+            'chair': 4,
+            'lamp': 5
+        }
+
+        # Track statistics
+        self.class_counts = Counter()
+        self.skipped_classes = Counter()
 
         # Create output directories
         self.images_path = self.output_path / "images"
@@ -46,6 +126,34 @@ class SUNRGBDParser:
         for split in ['train', 'val', 'test']:
             (self.images_path / split).mkdir(parents=True, exist_ok=True)
             (self.labels_path / split).mkdir(parents=True, exist_ok=True)
+
+    def normalize_class_name(self, class_name: str) -> str:
+        """
+        Normalize class name to one of the 6 target classes.
+
+        Args:
+            class_name: Original class name from annotation
+
+        Returns:
+            Normalized class name or None if not a target class
+        """
+        # Exact match in variations dictionary
+        if class_name in self.class_variations:
+            return self.class_variations[class_name]
+
+        # Special case: ANY object containing "chair" (case insensitive) maps to 'chair'
+        class_lower = class_name.lower()
+        if 'chair' in class_lower:
+            return 'chair'
+
+        # Case-insensitive partial matching for other target classes
+        for target in self.target_classes.keys():
+            if target in class_lower:
+                return target
+
+        # Not a target class
+        self.skipped_classes[class_name] += 1
+        return None
 
     def polygon_to_bbox(self, x_coords: List[int], y_coords: List[int]) -> Tuple[int, int, int, int]:
         """
@@ -100,13 +208,13 @@ class SUNRGBDParser:
 
     def parse_annotation_json(self, json_path: Path) -> List[Dict]:
         """
-        Parse annotation JSON file.
+        Parse annotation JSON file and filter for target classes.
 
         Args:
             json_path: Path to annotation JSON file
 
         Returns:
-            List of annotation dictionaries
+            List of annotation dictionaries (only target classes)
         """
         try:
             with open(json_path, 'r') as f:
@@ -120,20 +228,27 @@ class SUNRGBDParser:
                         if 'object' in poly:
                             obj_idx = poly['object']
                             if obj_idx < len(data['objects']):
-                                obj_name = data['objects'][obj_idx]['name']
-                                x_coords = poly['x']
-                                y_coords = poly['y']
+                                original_name = data['objects'][obj_idx]['name']
 
-                                # Convert polygon to bbox
-                                bbox = self.polygon_to_bbox(x_coords, y_coords)
+                                # Normalize to target class
+                                normalized_name = self.normalize_class_name(original_name)
 
-                                annotations.append({
-                                    'class_name': obj_name,
-                                    'bbox': bbox
-                                })
+                                if normalized_name:
+                                    x_coords = poly['x']
+                                    y_coords = poly['y']
 
-                                # Track all class names
-                                self.class_names.add(obj_name)
+                                    # Convert polygon to bbox
+                                    bbox = self.polygon_to_bbox(x_coords, y_coords)
+
+                                    # Validate bbox
+                                    if bbox[2] > bbox[0] and bbox[3] > bbox[1]:
+                                        annotations.append({
+                                            'class_name': normalized_name,
+                                            'bbox': bbox,
+                                            'original_name': original_name
+                                        })
+
+                                        self.class_counts[normalized_name] += 1
 
             return annotations
         except Exception as e:
@@ -150,7 +265,8 @@ class SUNRGBDParser:
         samples = []
 
         # Traverse the dataset directory
-        for root, dirs, files in os.walk(self.sunrgbd_path):
+        logger.info("Scanning dataset for samples...")
+        for root, dirs, files in tqdm(list(os.walk(self.sunrgbd_path))):
             root_path = Path(root)
 
             # Check if this directory has annotations
@@ -169,48 +285,43 @@ class SUNRGBDParser:
                             'sample_id': root_path.name
                         })
 
-        logger.info(f"Found {len(samples)} samples in dataset")
+        logger.info(f"Found {len(samples)} total samples in dataset")
         return samples
 
-    def create_class_mapping(self, min_samples: int = 10):
+    def filter_samples_with_target_classes(self, samples: List[Dict]) -> List[Dict]:
         """
-        Create class name to index mapping, filtering rare classes.
+        Include ALL samples - both with target objects and pure background images.
+        Background images help the model learn what is NOT a target object.
 
         Args:
-            min_samples: Minimum number of samples for a class to be included
+            samples: List of all samples
+
+        Returns:
+            List of all valid samples (including background images)
         """
-        # Count class occurrences
-        class_counts = {name: 0 for name in self.class_names}
+        filtered_samples = []
+        background_count = 0
 
-        samples = self.find_all_samples()
-        for sample in samples:
+        logger.info("Processing samples (including background images)...")
+        for sample in tqdm(samples, desc="Filtering samples"):
             annotations = self.parse_annotation_json(sample['annotation_path'])
-            for ann in annotations:
-                if ann['class_name'] in class_counts:
-                    class_counts[ann['class_name']] += 1
 
-        # Filter classes by minimum samples
-        filtered_classes = sorted([
-            name for name, count in class_counts.items()
-            if count >= min_samples
-        ])
+            # Include ALL samples - both with and without target objects
+            filtered_samples.append(sample)
 
-        self.class_to_idx = {name: idx for idx, name in enumerate(filtered_classes)}
+            # Track background images (no target objects)
+            if len(annotations) == 0:
+                background_count += 1
 
-        logger.info(f"Total classes found: {len(self.class_names)}")
-        logger.info(f"Classes after filtering (min {min_samples} samples): {len(filtered_classes)}")
-
-        # Save class names
-        class_file = self.output_path / "classes.txt"
-        with open(class_file, 'w') as f:
-            for class_name in filtered_classes:
-                f.write(f"{class_name}\n")
-
-        logger.info(f"Class names saved to {class_file}")
+        logger.info(f"Total samples: {len(filtered_samples)}")
+        logger.info(f"  - With target objects: {len(filtered_samples) - background_count}")
+        logger.info(f"  - Background images (no targets): {background_count}")
+        return filtered_samples
 
     def process_sample(self, sample: Dict, split: str) -> bool:
         """
         Process a single sample and save in YOLO format.
+        Includes background images (empty label files) for better training.
 
         Args:
             sample: Sample dictionary
@@ -224,30 +335,27 @@ class SUNRGBDParser:
             img = Image.open(sample['image_path'])
             img_width, img_height = img.size
 
-            # Parse annotations
+            # Parse annotations (only target classes)
             annotations = self.parse_annotation_json(sample['annotation_path'])
-
-            # Filter annotations to only include known classes
-            valid_annotations = []
-            for ann in annotations:
-                if ann['class_name'] in self.class_to_idx:
-                    valid_annotations.append(ann)
-
-            # Skip samples with no valid annotations
-            if len(valid_annotations) == 0:
-                return False
 
             # Create unique sample name
             sample_name = f"{sample['sample_id']}"
 
             # Copy image
             image_output = self.images_path / split / f"{sample_name}.jpg"
-            shutil.copy(sample['image_path'], image_output)
+
+            # Convert to JPG if needed
+            if sample['image_path'].suffix.lower() == '.png':
+                img_rgb = img.convert('RGB')
+                img_rgb.save(image_output, 'JPEG')
+            else:
+                shutil.copy(sample['image_path'], image_output)
 
             # Create YOLO format label file
+            # Empty file for background images (no annotations)
             label_output = self.labels_path / split / f"{sample_name}.txt"
             with open(label_output, 'w') as f:
-                for ann in valid_annotations:
+                for ann in annotations:
                     class_idx = self.class_to_idx[ann['class_name']]
                     yolo_bbox = self.bbox_to_yolo(ann['bbox'], img_width, img_height)
 
@@ -260,21 +368,19 @@ class SUNRGBDParser:
             logger.error(f"Error processing sample {sample['sample_id']}: {e}")
             return False
 
-    def split_dataset(self, train_ratio: float = 0.8, val_ratio: float = 0.1,
-                      test_ratio: float = 0.1, seed: int = 42):
+    def split_dataset(self, samples: List[Dict], train_ratio: float = 0.8,
+                      val_ratio: float = 0.1, test_ratio: float = 0.1, seed: int = 42):
         """
         Split dataset into train/val/test sets.
 
         Args:
+            samples: List of filtered samples
             train_ratio: Ratio of training samples
             val_ratio: Ratio of validation samples
             test_ratio: Ratio of test samples
             seed: Random seed for reproducibility
         """
         assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "Ratios must sum to 1"
-
-        # Get all samples
-        samples = self.find_all_samples()
 
         # Shuffle samples
         np.random.seed(seed)
@@ -306,58 +412,117 @@ class SUNRGBDParser:
 
     def create_yaml_config(self):
         """Create YOLO dataset configuration YAML file."""
-        yaml_content = f"""# SUN RGB-D Dataset Configuration for YOLOv8
+        yaml_content = f"""# SUN RGB-D Dataset Configuration for YOLOv8 - 6 Target Classes
+# Only includes: Mug, Book, Cabinet, Door, Chair, Lamp
+
 path: {self.output_path.absolute()}  # dataset root dir
 train: images/train  # train images (relative to 'path')
 val: images/val  # val images (relative to 'path')
 test: images/test  # test images (relative to 'path')
 
-# Classes
-nc: {len(self.class_to_idx)}  # number of classes
-names: {list(self.class_to_idx.keys())}  # class names
+# Classes (case-normalized)
+nc: 6  # number of classes
+names:
+  0: mug
+  1: book
+  2: cabinet
+  3: door
+  4: chair
+  5: lamp
 """
 
-        yaml_path = self.output_path / "sunrgbd.yaml"
+        yaml_path = self.output_path / "sunrgbd_6classes.yaml"
         with open(yaml_path, 'w') as f:
             f.write(yaml_content)
 
         logger.info(f"Dataset configuration saved to {yaml_path}")
 
-    def convert(self, min_samples_per_class: int = 10):
-        """
-        Main conversion pipeline.
+    def save_class_statistics(self):
+        """Save statistics about class distribution."""
+        stats_file = self.output_path / "class_statistics.txt"
 
-        Args:
-            min_samples_per_class: Minimum samples required per class
-        """
-        logger.info("Starting SUN RGB-D to YOLO conversion...")
+        with open(stats_file, 'w') as f:
+            f.write("=" * 80 + "\n")
+            f.write("SUN RGB-D FILTERED DATASET - CLASS STATISTICS\n")
+            f.write("=" * 80 + "\n\n")
 
-        # Find all samples first to collect class names
-        logger.info("Scanning dataset for class names...")
+            f.write("TARGET CLASSES (6 classes):\n")
+            f.write("-" * 80 + "\n")
+            total_instances = sum(self.class_counts.values())
+
+            for class_name in sorted(self.class_to_idx.keys()):
+                count = self.class_counts[class_name]
+                percentage = (count / total_instances * 100) if total_instances > 0 else 0
+                f.write(f"{class_name:<15} {count:>6} instances ({percentage:>5.2f}%)\n")
+
+            f.write("-" * 80 + "\n")
+            f.write(f"{'TOTAL':<15} {total_instances:>6} instances\n\n")
+
+            # Top skipped classes
+            f.write("=" * 80 + "\n")
+            f.write("TOP 50 SKIPPED CLASSES (not in target list):\n")
+            f.write("=" * 80 + "\n")
+            for class_name, count in self.skipped_classes.most_common(50):
+                f.write(f"{class_name:<40} {count:>6} occurrences\n")
+
+        logger.info(f"Class statistics saved to {stats_file}")
+
+    def convert(self):
+        """
+        Main conversion pipeline for 6 target classes.
+        Includes background images (images without target objects) for better training.
+        """
+        logger.info("=" * 80)
+        logger.info("Starting SUN RGB-D to YOLO conversion (6 Target Classes)")
+        logger.info("Target classes: Mug, Book, Cabinet, Door, Chair, Lamp")
+        logger.info("Includes background images for robust training")
+        logger.info("=" * 80)
+
+        # Find all samples
         all_samples = self.find_all_samples()
-        for sample in all_samples:
-            self.parse_annotation_json(sample['annotation_path'])
 
-        # Create class mapping
-        logger.info("Creating class mapping...")
-        self.create_class_mapping(min_samples=min_samples_per_class)
+        # Process all samples (including background images)
+        filtered_samples = self.filter_samples_with_target_classes(all_samples)
+
+        if len(filtered_samples) == 0:
+            logger.error("No samples found!")
+            return
+
+        # Print class distribution
+        logger.info("\nClass distribution (target objects only):")
+        for class_name in sorted(self.class_to_idx.keys()):
+            count = self.class_counts[class_name]
+            logger.info(f"  {class_name}: {count} instances")
+
+        total_target_instances = sum(self.class_counts.values())
+        logger.info(f"\nTotal target object instances: {total_target_instances}")
 
         # Split and process dataset
-        logger.info("Splitting and processing dataset...")
-        self.split_dataset()
+        logger.info("\nSplitting and processing dataset...")
+        self.split_dataset(filtered_samples)
 
         # Create YAML config
-        logger.info("Creating YAML configuration...")
+        logger.info("\nCreating YAML configuration...")
         self.create_yaml_config()
 
+        # Save statistics
+        logger.info("\nSaving class statistics...")
+        self.save_class_statistics()
+
+        logger.info("\n" + "=" * 80)
         logger.info("Conversion completed successfully!")
+        logger.info(f"Total samples: {len(filtered_samples)}")
+        logger.info(f"Total target object instances: {total_target_instances}")
+        logger.info("=" * 80)
 
 
 def main():
     """Main function."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Convert SUN RGB-D dataset to YOLO format")
+    parser = argparse.ArgumentParser(
+        description="Convert SUN RGB-D dataset to YOLO format (6 target classes only)"
+    )
     parser.add_argument(
         '--sunrgbd_path',
         type=str,
@@ -367,14 +532,8 @@ def main():
     parser.add_argument(
         '--output_path',
         type=str,
-        default='./Agents/data_prep/sunrgbd_yolo',
+        default='./Agents/object_detection/data/sunrgbd_6classes',
         help='Output path for YOLO format dataset'
-    )
-    parser.add_argument(
-        '--min_samples',
-        type=int,
-        default=10,
-        help='Minimum samples per class to include'
     )
     parser.add_argument(
         '--train_ratio',
@@ -407,7 +566,7 @@ def main():
     parser_obj = SUNRGBDParser(args.sunrgbd_path, args.output_path)
 
     # Run conversion
-    parser_obj.convert(min_samples_per_class=args.min_samples)
+    parser_obj.convert()
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ class Pipeline:
             return False
 
     def prepare_data(self, sunrgbd_path: str = './SUNRGBD',
-                     output_path: str = './Agents/data_prep/sunrgbd_yolo',
+                     output_path: str = './data/sunrgbd_6classes',
                      min_samples: int = 10):
         """
         Run data preparation step.
@@ -121,7 +121,7 @@ class Pipeline:
         if visualize:
             command.extend([
                 '--visualize',
-                './Agents/data_prep/sunrgbd_yolo/images/test',
+                './data/sunrgbd_6classes/images/test',
                 '--num_vis',
                 str(num_vis)
             ])
@@ -234,8 +234,8 @@ Examples:
     parser.add_argument(
         '--output_path',
         type=str,
-        default='./Agents/data_prep/sunrgbd_yolo',
-        help='Output path for processed dataset'
+        default='./data/sunrgbd_6classes',
+        help='Output path for processed dataset (6-class filtered)'
     )
     parser.add_argument(
         '--model',
