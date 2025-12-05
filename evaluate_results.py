@@ -25,7 +25,7 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # ============================================================================
 # CONFIGURATION - Configure these settings
 # ============================================================================
-RESULTS_CSV_FILE = "results_Qwen_Qwen2.5-VL-3B-Instruct_20251127_224915.csv"  # Name of the results CSV file to evaluate
+RESULTS_CSV_FILE = "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251205_104802.csv"  # Name of the results CSV file to evaluate
 RESULTS_FOLDER = "./results"  # Folder containing results files
 # ============================================================================
 
@@ -66,8 +66,8 @@ class ExtractedResponse:
     predicted_object_location: Optional[str] = None
     predicted_object_location_details: Optional[str] = None
 
-    predicted_distance_inches: Optional[float] = None
-    predicted_direction: Optional[str] = None
+    predicted_distance_meters: Optional[float] = None
+    predicted_direction_o_clock: Optional[int] = None
     navigation_instructions: Optional[List[str]] = None
     hand_guidance: Optional[str] = None
     fallback: Optional[str] = None
@@ -211,8 +211,8 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
         # Extract distance and direction
         distance_direction = json_data.get('distance_and_direction_from_camera', {})
         if distance_direction:
-            extracted.predicted_distance_inches = distance_direction.get('distance_inches')
-            extracted.predicted_direction = distance_direction.get('direction')
+            extracted.predicted_distance_meters = distance_direction.get('distance_meters')
+            extracted.predicted_direction_o_clock = distance_direction.get('direction_o_clock')
 
         # Extract navigation instructions
         nav_instructions = json_data.get('navigation_instructions')
@@ -272,30 +272,67 @@ def encode_image_to_base64(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 
-def distance_evaluation(predicted_distance_inches: Optional[float],
-                       gt_distance_meters: float,
-                       tolerance_percent: float = 20.0) -> bool:
+def distance_evaluation(predicted_distance_meters: Optional[float], gt_distance_meters: Optional[float]) -> int:
     """
-    Evaluate if the predicted distance is within acceptable tolerance of ground truth.
+    0–5 score for distance accuracy.
 
-    Args:
-        predicted_distance_inches: Predicted distance in inches
-        gt_distance_meters: Ground truth distance in meters
-        tolerance_percent: Acceptable error percentage (default 20%)
-
-    Returns:
-        True if prediction is within tolerance, False otherwise
+    Typical distances:
+      - Common: 0–2 m
+      - Very close: < 0.3 m
+      - Rare: > 10 m
     """
-    if predicted_distance_inches is None or gt_distance_meters is None:
-        return False
 
-    # Convert predicted inches to meters (1 inch = 0.0254 meters)
-    predicted_meters = predicted_distance_inches * 0.0254
+    if predicted_distance_meters is None or gt_distance_meters is None:
+        return 0
 
-    # Calculate percentage error
-    error_percent = abs(predicted_meters - gt_distance_meters) / gt_distance_meters * 100
+    abs_error = abs(predicted_distance_meters - gt_distance_meters)
 
-    return error_percent <= tolerance_percent
+    # Case 1: very close objects (< 0.3 m), grabbing range, be strict on cm
+    if gt_distance_meters < 0.3:
+        if abs_error <= 0.03:      # ≤ 3 cm
+            return 5
+        elif abs_error <= 0.06:    # ≤ 6 cm
+            return 4
+        elif abs_error <= 0.10:    # ≤ 10 cm
+            return 3
+        elif abs_error <= 0.20:    # ≤ 20 cm
+            return 2
+        elif abs_error <= 0.35:    # ≤ 35 cm
+            return 1
+        else:
+            return 0
+
+    # Case 2: typical range (0.3–2 m), use relative error
+    if gt_distance_meters <= 2.0:
+        error_percent = abs_error / gt_distance_meters * 100.0  # [web:30]
+        if error_percent <= 5:
+            return 5
+        elif error_percent <= 10:
+            return 4
+        elif error_percent <= 20:
+            return 3
+        elif error_percent <= 35:
+            return 2
+        elif error_percent <= 50:
+            return 1
+        else:
+            return 0
+
+    # Case 3: farther objects (> 2 m), more tolerant, mostly for rough context
+    # Use looser percentage bands since precise distance is less critical.
+    error_percent = abs_error / gt_distance_meters * 100.0
+    if error_percent <= 10:
+        return 5
+    elif error_percent <= 25:
+        return 4
+    elif error_percent <= 40:
+        return 3
+    elif error_percent <= 60:
+        return 2
+    elif error_percent <= 80:
+        return 1
+    else:
+        return 0
 
 
 def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> Dict[str, int]:
@@ -350,7 +387,7 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
     - Found: {response.found}
     - Object Location Description: {response.predicted_object_location or 'Not provided'}
     - Detailed Area Description: {response.predicted_object_location_details or 'Not provided'}
-    - Predicted Direction: {response.predicted_direction or 'Not provided'}
+    - Predicted Direction: {response.predicted_direction_o_clock if response.predicted_direction_o_clock is not None else 'Not provided'}
     - Navigation Instructions: {response.navigation_instructions or 'Not provided'}
     - Hand Guidance: {response.hand_guidance or 'Not provided'}
     - Fallback: {response.fallback or 'Not provided'}
@@ -486,12 +523,8 @@ def evaluate(extracted_responses: List[ExtractedResponse], test_mode: bool = Tru
         # Only evaluate further if object was correctly identified as present
         if metric['found'] > 0 and response.found:
             # Evaluate distance
-            if distance_evaluation(response.predicted_distance_inches, response.gt_object_distance):
-                metric['distance'] = EVALUATION_METRICS['distance']
-                logger.info(f"  - Distance: CORRECT (within tolerance)")
-            else:
-                metric['distance'] = 0
-                logger.info(f"  - Distance: INCORRECT")
+            metric['distance'] = distance_evaluation(response.predicted_distance_meters, response.gt_object_distance)
+            logger.info(f"  - Distance score: {metric['distance']}")
 
             # Construct image path
             image_path = os.path.join(images_folder, response.image_name)
@@ -569,7 +602,7 @@ def save_evaluation_report(extracted_responses: List[ExtractedResponse],
             'prompt_id', 'image_name', 'model_name',
             'gt_object', 'gt_distance_m', 'gt_direction', 'gt_scene',
             'parse_success', 'found_predicted', 'found_score',
-            'predicted_distance_inches', 'predicted_direction',
+            'predicted_distance_meters', 'predicted_direction_o_clock',
             'score_object_location_desc', 'score_object_location_detailed',
             'score_distance', 'score_direction',
             'score_navigation', 'score_hand_guidance', 'score_fallback',
@@ -603,8 +636,8 @@ def save_evaluation_report(extracted_responses: List[ExtractedResponse],
                 'parse_success': response.parse_success,
                 'found_predicted': response.found,
                 'found_score': metric.get('found', 0),
-                'predicted_distance_inches': response.predicted_distance_inches,
-                'predicted_direction': response.predicted_direction,
+                'predicted_distance_meters': response.predicted_distance_meters,
+                'predicted_direction_o_clock': response.predicted_direction_o_clock,
                 'score_object_location_desc': metric.get('object_location_description', 0),
                 'score_object_location_detailed': metric.get('object_location_detailed_area', 0),
                 'score_distance': metric.get('distance', 0),

@@ -322,11 +322,17 @@ def update_prompt_context(prompt: str) -> str:
         **High-Level Task:**  
         The user will upload an image of their surroundings and ask you to find a specific object.  
         Your job is to:
-        1. Identify whether the target object appears in the image.  
-        2. If present, determine its position and distance relative to the camera (the user's perspective).  
-        3. Generate safe, step-by-step navigation instructions to guide the user to the object, remember that user cannot see any objects. Provide the path instructions of directly movements.
-        4. Explain how to physically reach and grab the object once they arrive at a spot where they can fetch it directly.  
-        5. If object cannot be found or instructions are unclear, provide corrective guidance.
+        1. Decide whether the target object is visible in the image.  
+        2. If visible, describe its position in the image and its approximate direction and distance from the camera.  
+        3. Provide clear, discrete movement instructions the user can follow without seeing anything.
+        4. Explain how to position and move the user's hand to grab the object once they are close.  
+        5. If the object is not visible or the scene is too ambiguous for safe guidance, say so clearly and propose how to retake the photo.
+        
+        **You must:**
+        - Be honest about uncertainty.
+        - Never invent objects that are not clearly visible.
+        - Prefer safety over brevity; avoid suggesting fast or risky movements.
+        - Assume the user is standing where the photo was taken and facing the same direction as the camera.
 
         ---
 
@@ -342,16 +348,16 @@ def update_prompt_context(prompt: str) -> str:
             "Detailed area description": "split image into 4 parts: left top, right top, left bottom, right bottom. Describe where the object appears in each part, or null if not present",
         },
         "distance_and_direction_from_camera": {
-            "distance_inches": float or null,
-            "direction": "in front / left / right / slightly left / slightly right / above waist / below waist"
+            "distance_meters": "float (approximate distance in meters from the camera to the object) or null if not present",
+            "direction_o_clock": "integer from 1 to 12 (approximate direction in 12 o'clock format from the camera to the object) or null if not present"
         },
         "navigation_instructions": [
-            "Step-by-step instructions from the user's current facing direction to approach the object.",
+            "Tell the user in the second person perspective how to approach the object in the image, step-by-step instructions from the user's current facing direction to approach the object.",
             "Only reference stable, touchable landmarks (table, chair, sofa, wall, counter, etc.).",
             "Flag obstacles in the path."
         ],
-        "hand_guidance": "Describe how to position and move the user's hand to grab the object.",
-        "fallback": "If object not found or image unclear, ask user to take another photo and suggest how to reposition."
+        "hand_guidance": "Tell the user in the second person perspective how to position and move the user's hand to grab the object.",
+        "fallback": "If object is not found or image is unclear, ask the user in the second person perspective to take another photo and suggest how to reposition."
         }
         **User's Request:**
     """
