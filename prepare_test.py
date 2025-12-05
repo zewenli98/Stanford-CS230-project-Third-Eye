@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import random
 import numpy as np
@@ -517,10 +518,10 @@ class SUNRGBDTestDataPreparer:
                 scene_data = self.load_scene_data(scene_folder)
 
                 # Check that scene has NO target objects
-                goal_objects_list = self.select_all_goal_objects(scene_data, goal_objects, max_objects=1000)
+                closest_object = self.select_closest_goal_object(scene_data, goal_objects)
 
                 # Only use scenes with NO target objects
-                if goal_objects_list is not None and len(goal_objects_list) > 0:
+                if closest_object is not None:
                     continue
 
                 # Pick a random goal object name (fake target)
@@ -776,10 +777,130 @@ class SUNRGBDTestDataPreparer:
         logger.info(f"  Images directory: {output_images_dir}")
         logger.info(f"  Total samples: {len(csv_rows)}")
 
+    def append_negative_samples(self,
+                                n_negatives: int = 10,
+                                entry_folder: Optional[str] = None,
+                                goal_objects: List[str] = None,
+                                output_csv: str = "./queries/prompts.csv",
+                                output_images_dir: str = "./queries/images"):
+        """
+        Generate negative samples and append them to existing CSV file.
+        Does NOT regenerate positive samples - only adds new negatives.
+
+        Args:
+            n_negatives: Number of negative samples to generate
+            entry_folder: Specific entry folder or None for random selection
+            goal_objects: List of object names (pick one as fake target)
+            output_csv: Path to existing CSV file
+            output_images_dir: Directory to save images
+
+        Returns:
+            Number of negative samples successfully added
+        """
+        output_csv_path = Path(output_csv)
+        output_images_path = Path(output_images_dir)
+
+        # Check if CSV exists
+        if not output_csv_path.exists():
+            logger.error(f"CSV file not found: {output_csv}")
+            logger.error("Please run the main script first to generate positive samples")
+            return 0
+
+        # Read existing CSV to get max prompt_id
+        existing_rows = []
+        max_prompt_id = 0
+
+        with open(output_csv_path, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            fieldnames = reader.fieldnames
+            for row in reader:
+                existing_rows.append(row)
+                max_prompt_id = max(max_prompt_id, int(row['prompt_id']))
+
+        logger.info(f"Found {len(existing_rows)} existing samples in CSV")
+        logger.info(f"Max prompt_id: {max_prompt_id}")
+        logger.info(f"Generating {n_negatives} negative samples...")
+
+        # Generate negative samples
+        negative_samples = []
+        for i in range(n_negatives):
+            logger.info(f"\nPreparing negative sample {i + 1}/{n_negatives}")
+            neg_sample = self.prepare_negative_sample(entry_folder, goal_objects)
+            if neg_sample:
+                negative_samples.append(neg_sample)
+
+        if not negative_samples:
+            logger.warning("No negative samples were generated")
+            return 0
+
+        logger.info(f"\nSuccessfully generated {len(negative_samples)} negative samples")
+
+        # Prepare new CSV rows
+        new_rows = []
+        for idx, sample in enumerate(negative_samples, start=1):
+            prompt_id = max_prompt_id + idx
+            object_name = sample.get('primary_object', 'object')
+            prompt_text = f"where is {object_name}"
+
+            # Generate unique image filenames
+            scene_name = Path(sample['scene_folder']).name
+            image_filename = f"{prompt_id:04d}_{scene_name}.jpg"
+            depth_image_filename = f"{prompt_id:04d}_{scene_name}_depth.png"
+
+            # Copy RGB image
+            rgb_image_path = output_images_path / image_filename
+            sample['image'].save(rgb_image_path)
+
+            # Copy depth image
+            scene_folder = Path(sample['scene_folder'])
+            depth_dir = scene_folder / "depth"
+            depth_files = list(depth_dir.glob("*.png"))
+            if depth_files:
+                depth_image_path = output_images_path / depth_image_filename
+                shutil.copy2(depth_files[0], depth_image_path)
+            else:
+                logger.warning(f"No depth image found for sample {prompt_id}")
+                depth_image_filename = ""
+
+            # Negative sample row (empty bbox, distance, direction)
+            row = {
+                'prompt_id': prompt_id,
+                'prompt_text': prompt_text,
+                'image_name': image_filename,
+                'object': object_name,
+                'object_bbox': "[]",
+                'object_distance': "",
+                'object_direction': "",
+                'scene': sample['scene_type'],
+                'annotation': json.dumps(sample.get('full_annotation', {})),
+                'depth_image': depth_image_filename,
+                'is_negative': 'true'
+            }
+            new_rows.append(row)
+            logger.info(f"  [{prompt_id:04d}] {prompt_text} - NEGATIVE - {sample['scene_type']}")
+
+        # Append to existing CSV
+        with open(output_csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writerows(new_rows)
+
+        logger.info(f"\n{'='*70}")
+        logger.info(f"Successfully appended {len(new_rows)} negative samples to CSV")
+        logger.info(f"  CSV file: {output_csv}")
+        logger.info(f"  Images directory: {output_images_dir}")
+        logger.info(f"  Total samples now: {len(existing_rows) + len(new_rows)}")
+        logger.info(f"{'='*70}")
+
+        return len(new_rows)
+
 
 def main():
     """
     Main function to generate test queries using hyperparameters defined at the top of the file.
+
+    Command-line usage:
+        python prepare_test.py                  # Generate positive and negative samples (default)
+        python prepare_test.py --add-negatives N  # Append N negative samples to existing CSV
 
     Uses the following hyperparameters:
         - NUM_SAMPLES: Number of test samples to generate
@@ -789,6 +910,49 @@ def main():
         - OUTPUT_IMAGES_DIR: Output directory for images
         - OUTPUT_CSV: Output CSV file path
     """
+    # Check for command-line arguments
+    if len(sys.argv) > 1 and sys.argv[1] == '--add-negatives':
+        # Mode: Append negative samples only
+        if len(sys.argv) < 3:
+            logger.error("Usage: python prepare_test.py --add-negatives N")
+            logger.error("  N = number of negative samples to add")
+            return
+
+        try:
+            n_negatives = int(sys.argv[2])
+        except ValueError:
+            logger.error(f"Invalid number: {sys.argv[2]}")
+            logger.error("Usage: python prepare_test.py --add-negatives N")
+            return
+
+        logger.info("="*70)
+        logger.info("SUNRGBD Test Data Preparation - Append Negative Samples Only")
+        logger.info("="*70)
+        logger.info(f"Adding {n_negatives} negative samples to existing CSV")
+        logger.info(f"  CSV file: {OUTPUT_CSV}")
+        logger.info(f"  Images directory: {OUTPUT_IMAGES_DIR}")
+        logger.info("="*70)
+
+        # Initialize preparer
+        preparer = SUNRGBDTestDataPreparer(sunrgbd_root=SUNRGBD_ROOT)
+
+        # Append negative samples
+        num_added = preparer.append_negative_samples(
+            n_negatives=n_negatives,
+            entry_folder=ENTRY_FOLDER,
+            goal_objects=GOAL_OBJECTS,
+            output_csv=OUTPUT_CSV,
+            output_images_dir=OUTPUT_IMAGES_DIR
+        )
+
+        if num_added > 0:
+            logger.info(f"\n✅ Successfully added {num_added} negative samples")
+        else:
+            logger.error(f"\n❌ Failed to add negative samples")
+
+        return
+
+    # Default mode: Generate positive and negative samples
     logger.info("="*70)
     logger.info("SUNRGBD Test Data Preparation")
     logger.info("="*70)
