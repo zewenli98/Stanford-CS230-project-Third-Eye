@@ -25,8 +25,19 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # ============================================================================
 # CONFIGURATION - Configure these settings
 # ============================================================================
-RESULTS_CSV_FILE = "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251205_104802.csv"  # Name of the results CSV file to evaluate
-RESULTS_FOLDER = "./results"  # Folder containing results files
+RESULTS_CSV_FILES = [
+    "results_._finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_095202.csv",
+    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_095053.csv",
+    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094943.csv",
+    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094839.csv",
+    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094729.csv",
+    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094500.csv",
+    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094229.csv",
+    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094000.csv",
+    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_093404.csv",
+    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_093035.csv",
+    ] # Name of the results CSV file to evaluate
+RESULTS_FOLDER = "./results_1130"  # Folder containing results files
 # ============================================================================
 
 EVALUATION_METRICS = {
@@ -675,74 +686,75 @@ def main():
     )
     args = parser.parse_args()
 
-    # Construct full path to results CSV
-    results_csv_path = os.path.join(RESULTS_FOLDER, RESULTS_CSV_FILE)
+    for result_single_file in RESULTS_CSV_FILES:
+        # Construct full path to results CSV
+        results_csv_path = os.path.join(RESULTS_FOLDER, result_single_file)
 
-    logger.info("="*70)
-    logger.info("Third Eye Evaluation Pipeline")
-    logger.info("="*70)
-    logger.info(f"Results file: {results_csv_path}")
-    if args.test:
-        logger.info("Mode: TEST (1 sample only)")
-    elif args.max_samples:
-        logger.info(f"Mode: LIMITED ({args.max_samples} samples)")
+        logger.info("="*70)
+        logger.info("Third Eye Evaluation Pipeline")
+        logger.info("="*70)
+        logger.info(f"Results file: {results_csv_path}")
+        if args.test:
+            logger.info("Mode: TEST (1 sample only)")
+        elif args.max_samples:
+            logger.info(f"Mode: LIMITED ({args.max_samples} samples)")
 
-    # Extract all responses from CSV
-    extracted_responses = extract_all_responses(results_csv_path)
+        # Extract all responses from CSV
+        extracted_responses = extract_all_responses(results_csv_path)
 
-    # Limit samples if max_samples is specified
-    if args.max_samples and not args.test:
-        extracted_responses = extracted_responses[:args.max_samples]
-        logger.info(f"Limited to {len(extracted_responses)} samples")
+        # Limit samples if max_samples is specified
+        if args.max_samples and not args.test:
+            extracted_responses = extracted_responses[:args.max_samples]
+            logger.info(f"Limited to {len(extracted_responses)} samples")
 
-    # Evaluate the responses
-    metrics = evaluate(extracted_responses, test_mode=args.test)
+        # Evaluate the responses
+        metrics = evaluate(extracted_responses, test_mode=args.test)
 
-    # Save detailed evaluation report
-    report_filename = RESULTS_CSV_FILE.replace('.csv', '_evaluation.csv')
-    report_path = os.path.join(RESULTS_FOLDER, report_filename)
-    save_evaluation_report(extracted_responses, metrics, report_path)
+        # Save detailed evaluation report
+        report_filename = result_single_file.replace('.csv', '_evaluation.csv')
+        report_path = os.path.join(RESULTS_FOLDER, report_filename)
+        save_evaluation_report(extracted_responses, metrics, report_path)
 
-    # Calculate summary statistics
-    total_samples = len(metrics)
-    if total_samples > 0:
-        summary = {
-            'total_samples': total_samples,
-            'average_scores': {
-                'found': sum(m['found'] for m in metrics) / total_samples,
-                'object_location_description': sum(m['object_location_description'] for m in metrics) / total_samples,
-                'object_location_detailed_area': sum(m['object_location_detailed_area'] for m in metrics) / total_samples,
-                'distance': sum(m['distance'] for m in metrics) / total_samples,
-                'direction': sum(m['direction'] for m in metrics) / total_samples,
-                'navigation_instructions': sum(m['navigation_instructions'] for m in metrics) / total_samples,
-                'hand_guidance': sum(m['hand_guidance'] for m in metrics) / total_samples,
-                'fallback': sum(m['fallback'] for m in metrics) / total_samples,
-                'total': sum(m['total_score'] for m in metrics) / total_samples,
-            },
-            'max_possible_scores': EVALUATION_METRICS,
-            'total_max_possible': sum(EVALUATION_METRICS.values()),
-            'overall_percentage': (sum(m['total_score'] for m in metrics) / (total_samples * sum(EVALUATION_METRICS.values())) * 100) if total_samples > 0 else 0,
-            'individual_metrics': metrics
-        }
-    else:
-        summary = {
-            'total_samples': 0,
-            'average_scores': {},
-            'max_possible_scores': EVALUATION_METRICS,
-            'overall_percentage': 0,
-            'individual_metrics': []
-        }
+        # Calculate summary statistics
+        total_samples = len(metrics)
+        if total_samples > 0:
+            summary = {
+                'total_samples': total_samples,
+                'average_scores': {
+                    'found': sum(m['found'] for m in metrics) / total_samples,
+                    'object_location_description': sum(m['object_location_description'] for m in metrics) / total_samples,
+                    'object_location_detailed_area': sum(m['object_location_detailed_area'] for m in metrics) / total_samples,
+                    'distance': sum(m['distance'] for m in metrics) / total_samples,
+                    'direction': sum(m['direction'] for m in metrics) / total_samples,
+                    'navigation_instructions': sum(m['navigation_instructions'] for m in metrics) / total_samples,
+                    'hand_guidance': sum(m['hand_guidance'] for m in metrics) / total_samples,
+                    'fallback': sum(m['fallback'] for m in metrics) / total_samples,
+                    'total': sum(m['total_score'] for m in metrics) / total_samples,
+                },
+                'max_possible_scores': EVALUATION_METRICS,
+                'total_max_possible': sum(EVALUATION_METRICS.values()),
+                'overall_percentage': (sum(m['total_score'] for m in metrics) / (total_samples * sum(EVALUATION_METRICS.values())) * 100) if total_samples > 0 else 0,
+                'individual_metrics': metrics
+            }
+        else:
+            summary = {
+                'total_samples': 0,
+                'average_scores': {},
+                'max_possible_scores': EVALUATION_METRICS,
+                'overall_percentage': 0,
+                'individual_metrics': []
+            }
 
-    # Save metrics summary
-    metrics_filename = RESULTS_CSV_FILE.replace('.csv', '_metrics.json')
-    metrics_path = os.path.join(RESULTS_FOLDER, metrics_filename)
-    with open(metrics_path, 'w') as f:
-        json.dump(summary, f, indent=2)
-    logger.info(f"Metrics summary saved to {metrics_path}")
+        # Save metrics summary
+        metrics_filename = result_single_file.replace('.csv', '_metrics.json')
+        metrics_path = os.path.join(RESULTS_FOLDER, metrics_filename)
+        with open(metrics_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        logger.info(f"Metrics summary saved to {metrics_path}")
 
-    logger.info("\n" + "="*70)
-    logger.info("Evaluation Complete!")
-    logger.info("="*70)
+        logger.info("\n" + "="*70)
+        logger.info("Evaluation Complete!")
+        logger.info("="*70)
 
 
 if __name__ == "__main__":
