@@ -224,3 +224,6 @@ Agents/distance_calculator/data_prepare/
 Agents/distance_calculator/logs/
 Agents/distance_calculator/models/
 *.md
+
+Agents/object_detection/sunrgbd_6classes_detection/
+Agents/object_detection/data/
