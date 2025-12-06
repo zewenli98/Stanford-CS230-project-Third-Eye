@@ -37,15 +37,20 @@ logger = logging.getLogger(__name__)
 class YOLOTrainer:
     """Wrapper class for YOLOv8 training with custom callbacks and monitoring."""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, resume_from: str = None):
         """
         Initialize trainer.
 
         Args:
             config_path: Path to configuration file
+            resume_from: Path to checkpoint to resume from (optional)
         """
         self.config = Config(config_path)
         self.config.validate()
+
+        # Resume parameters
+        self.resume_from = resume_from
+        self.is_resuming = resume_from is not None
 
         # Create output directories
         self.save_dir = Path(self.config.get('logging.save_dir'))
@@ -62,19 +67,31 @@ class YOLOTrainer:
 
     def setup_model(self):
         """Initialize YOLOv8 model."""
-        model_name = self.config.get('model.name')
-        pretrained = self.config.get('model.pretrained')
+        # If resuming from checkpoint, load that checkpoint
+        if self.is_resuming:
+            checkpoint_path = Path(self.resume_from)
+            if not checkpoint_path.exists():
+                raise FileNotFoundError(f"Resume checkpoint not found: {self.resume_from}")
 
-        logger.info(f"Initializing {model_name} model (pretrained={pretrained})")
+            logger.info(f"Loading checkpoint for resume training: {self.resume_from}")
+            self.model = YOLO(str(checkpoint_path))
+            logger.info(f"Checkpoint loaded successfully. Resuming training...")
 
-        if pretrained:
-            # Load pretrained model
-            self.model = YOLO(f"{model_name}.pt")
         else:
-            # Load model architecture only
-            self.model = YOLO(f"{model_name}.yaml")
+            # Normal initialization
+            model_name = self.config.get('model.name')
+            pretrained = self.config.get('model.pretrained')
 
-        logger.info(f"Model initialized: {self.model.model}")
+            logger.info(f"Initializing {model_name} model (pretrained={pretrained})")
+
+            if pretrained:
+                # Load pretrained model
+                self.model = YOLO(f"{model_name}.pt")
+            else:
+                # Load model architecture only
+                self.model = YOLO(f"{model_name}.yaml")
+
+            logger.info(f"Model initialized: {self.model.model}")
 
     def check_early_stopping(self, epoch: int, fitness: float) -> bool:
         """
@@ -156,7 +173,16 @@ class YOLOTrainer:
         # Validation parameters
         save_period = self.config.get('checkpointing.save_period')
 
-        logger.info("Starting training with configuration:")
+        logger.info("=" * 80)
+        if self.is_resuming:
+            logger.info("RESUMING TRAINING FROM CHECKPOINT")
+            logger.info(f"  Checkpoint: {self.resume_from}")
+            logger.info(f"  Additional epochs: {epochs}")
+            logger.info("  Previous training data will be preserved")
+        else:
+            logger.info("STARTING NEW TRAINING")
+
+        logger.info("Training configuration:")
         logger.info(f"  Data: {data_yaml}")
         logger.info(f"  Epochs: {epochs}")
         logger.info(f"  Batch size: {batch_size}")
@@ -164,8 +190,13 @@ class YOLOTrainer:
         logger.info(f"  Device: {device}")
         logger.info(f"  Optimizer: {optimizer}")
         logger.info(f"  Learning rate: {lr0} -> {lrf}")
+        logger.info("=" * 80)
 
         try:
+            # Determine resume parameter
+            # If resuming, pass the checkpoint path; otherwise False
+            resume_param = str(self.resume_from) if self.is_resuming else False
+
             # Train the model
             self.results = self.model.train(
                 # Data
@@ -215,8 +246,8 @@ class YOLOTrainer:
                 # Validation
                 val=True,
 
-                # Resume
-                resume=False,
+                # Resume - use checkpoint path if resuming, otherwise False
+                resume=resume_param,
             )
 
             logger.info("Training completed successfully!")
@@ -321,17 +352,209 @@ class YOLOTrainer:
             logger.error(f"Error exporting model: {e}")
             raise
 
+    @staticmethod
+    def continue_training(checkpoint_path: str, additional_epochs: int, config_path: str = None):
+        """
+        Convenience method to continue training from a checkpoint.
+
+        This method automatically:
+        - Loads the checkpoint
+        - Preserves all previous training data
+        - Trains for additional epochs
+        - Saves results in the same directory structure
+
+        Args:
+            checkpoint_path: Path to the checkpoint (.pt file) to resume from
+            additional_epochs: Number of additional epochs to train
+            config_path: Optional path to config file (uses default if not specified)
+
+        Returns:
+            Training results
+
+        Example:
+            >>> # Continue training for 100 more epochs
+            >>> YOLOTrainer.continue_training(
+            ...     checkpoint_path='./models/test.pt',
+            ...     additional_epochs=100
+            ... )
+        """
+        checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+        # First, load checkpoint to check how many epochs it already trained
+        # Note: weights_only=False is safe here since we're loading our own checkpoint
+        checkpoint = torch.load(str(checkpoint_path), map_location='cpu', weights_only=False)
+        checkpoint_epochs = checkpoint.get('epoch', 0)
+
+        # Calculate TOTAL target epochs (checkpoint epochs + additional epochs)
+        total_target_epochs = checkpoint_epochs + additional_epochs
+
+        logger.info("=" * 80)
+        logger.info("CONTINUING TRAINING FROM CHECKPOINT")
+        logger.info(f"  Checkpoint: {checkpoint_path}")
+        logger.info(f"  Checkpoint trained epochs: {checkpoint_epochs}")
+        logger.info(f"  Additional epochs to train: {additional_epochs}")
+        logger.info(f"  Total target epochs: {total_target_epochs}")
+        logger.info("=" * 80)
+
+        # Get config for other training parameters
+        if config_path is None:
+            config_path = '../configs/training_config.yaml'
+
+        config = Config(config_path)
+        config.validate()
+
+        # Get training parameters from config
+        data_yaml = config.get('data.yaml_path')
+        batch_size = config.get('training.batch_size')
+        img_size = config.get('data.img_size')
+        device = config.get('hardware.device')
+        workers = config.get('hardware.workers')
+        amp = config.get('hardware.amp')
+
+        # Optimizer parameters
+        optimizer = config.get('training.optimizer')
+        lr0 = config.get('training.lr0')
+        lrf = config.get('training.lrf')
+        momentum = config.get('training.momentum')
+        weight_decay = config.get('training.weight_decay')
+        warmup_epochs = config.get('training.warmup_epochs')
+
+        # Augmentation parameters
+        hsv_h = config.get('augmentation.hsv_h')
+        hsv_s = config.get('augmentation.hsv_s')
+        hsv_v = config.get('augmentation.hsv_v')
+        degrees = config.get('augmentation.degrees')
+        translate = config.get('augmentation.translate')
+        scale = config.get('augmentation.scale')
+        shear = config.get('augmentation.shear')
+        perspective = config.get('augmentation.perspective')
+        flipud = config.get('augmentation.flipud')
+        fliplr = config.get('augmentation.fliplr')
+        mosaic = config.get('augmentation.mosaic')
+        mixup = config.get('augmentation.mixup')
+
+        project = config.get('logging.project')
+        name = config.get('logging.name')
+        verbose = config.get('logging.verbose')
+        plots = config.get('logging.plots')
+        save_period = config.get('checkpointing.save_period')
+
+        logger.info(f"Training configuration:")
+        logger.info(f"  Data: {data_yaml}")
+        logger.info(f"  Batch size: {batch_size}")
+        logger.info(f"  Device: {device}")
+        logger.info(f"  Optimizer: {optimizer}")
+        logger.info(f"  Learning rate: {lr0} -> {lrf}")
+        logger.info("")
+        logger.info(f"Epoch calculation:")
+        logger.info(f"  Checkpoint has: {checkpoint_epochs} epochs")
+        logger.info(f"  You requested: {additional_epochs} additional epochs")
+        logger.info(f"  Total target: {total_target_epochs} epochs")
+        logger.info(f"  Will train: {additional_epochs} more epochs")
+
+        # Load the checkpoint directly as the model
+        # This ensures YOLO knows we're continuing from this checkpoint
+        model = YOLO(str(checkpoint_path))
+        logger.info(f"Loaded checkpoint model: {checkpoint_path}")
+
+        # Train with the new target epochs
+        # Since model is already loaded from checkpoint, just specify new total epochs
+        results = model.train(
+            # Data
+            data=data_yaml,
+            epochs=total_target_epochs,  # TOTAL target epochs (checkpoint + additional)
+            batch=batch_size,
+            imgsz=img_size,
+
+            # Hardware
+            device=device,
+            workers=workers,
+            amp=amp,
+
+            # Optimizer
+            optimizer=optimizer,
+            lr0=lr0,
+            lrf=lrf,
+            momentum=momentum,
+            weight_decay=weight_decay,
+            warmup_epochs=warmup_epochs,
+
+            # Augmentation
+            hsv_h=hsv_h,
+            hsv_s=hsv_s,
+            hsv_v=hsv_v,
+            degrees=degrees,
+            translate=translate,
+            scale=scale,
+            shear=shear,
+            perspective=perspective,
+            flipud=flipud,
+            fliplr=fliplr,
+            mosaic=mosaic,
+            mixup=mixup,
+
+            # Logging
+            project=project,
+            name=name,
+            exist_ok=True,
+            verbose=verbose,
+            plots=plots,
+
+            # Checkpointing
+            save=True,
+            save_period=save_period,
+
+            # Validation
+            val=True,
+
+            # No need for resume parameter - model is already loaded from checkpoint
+            # YOLO will automatically continue training from the loaded checkpoint
+        )
+
+        logger.info("=" * 80)
+        logger.info("TRAINING CONTINUATION COMPLETED")
+        logger.info(f"  Started from epoch: {checkpoint_epochs}")
+        logger.info(f"  Trained additional epochs: {additional_epochs}")
+        logger.info(f"  Final total epochs: {total_target_epochs}")
+        logger.info(f"  All training history preserved for visualization")
+        logger.info("=" * 80)
+
+        return results
+
 
 def main():
     """Main training function."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Train YOLOv8 on SUN RGB-D dataset")
+    parser = argparse.ArgumentParser(
+        description="Train YOLOv8 on SUN RGB-D dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Start new training
+  python train.py --config ../configs/training_config.yaml
+
+  # Resume training from checkpoint (continues for epochs specified in config)
+  python train.py --resume ./models/test.pt --config ../configs/training_config.yaml
+
+  # Resume and validate
+  python train.py --resume ./models/test.pt --validate
+        """
+    )
     parser.add_argument(
         '--config',
         type=str,
         default='../configs/training_config.yaml',
         help='Path to training configuration file'
+    )
+    parser.add_argument(
+        '--resume',
+        type=str,
+        default=None,
+        help='Path to checkpoint (.pt file) to resume training from. '
+             'Previous training data will be preserved for charts.'
     )
     parser.add_argument(
         '--validate',
@@ -347,8 +570,22 @@ def main():
 
     args = parser.parse_args()
 
+    # Validate resume checkpoint exists if specified
+    if args.resume:
+        resume_path = Path(args.resume)
+        if not resume_path.exists():
+            logger.error(f"Resume checkpoint not found: {args.resume}")
+            logger.error("Please provide a valid path to a .pt checkpoint file")
+            sys.exit(1)
+
+        if not resume_path.suffix == '.pt':
+            logger.error(f"Resume checkpoint must be a .pt file, got: {resume_path.suffix}")
+            sys.exit(1)
+
+        logger.info(f"Will resume training from: {args.resume}")
+
     # Initialize trainer
-    trainer = YOLOTrainer(config_path=args.config)
+    trainer = YOLOTrainer(config_path=args.config, resume_from=args.resume)
 
     # Train
     trainer.train()

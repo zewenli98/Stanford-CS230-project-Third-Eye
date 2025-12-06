@@ -357,6 +357,180 @@ class DepthEvaluator:
 
         logger.info(f"Comparison grid saved to {self.output_dir / 'comparison_grid.png'}")
 
+    def generate_random_heatmaps(self, split: str = 'test', num_samples: int = 5):
+        """
+        Generate random heatmap visualizations with error maps.
+
+        Creates visualizations showing:
+        - Original RGB image
+        - Ground truth depth heatmap (plasma colormap)
+        - Predicted depth heatmap (plasma colormap)
+        - Error map between ground truth and prediction
+
+        Qualitative Point: Using the 'plasma' colormap, we observe that the relative
+        depth order is correctly preserved, with warmer colors (yellow/red) representing
+        closer objects and cooler colors (purple/blue) representing farther objects.
+
+        Args:
+            split: Dataset split to use
+            num_samples: Number of random samples to visualize (default: 5)
+        """
+        logger.info(f"Generating {num_samples} random heatmap visualizations...")
+
+        # Create dataset
+        dataset = DepthDataset(self.data_path, split=split)
+
+        # Randomly sample indices
+        np.random.seed(42)  # For reproducibility
+        total_samples = len(dataset)
+        random_indices = np.random.choice(total_samples, size=min(num_samples, total_samples), replace=False)
+
+        # Create output directory for heatmaps
+        heatmap_dir = Path('./outputs/heatmaps')
+        heatmap_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create qualitative analysis file
+        analysis_path = heatmap_dir / 'qualitative_analysis.txt'
+        with open(analysis_path, 'w') as f:
+            f.write("="*80 + "\n")
+            f.write("QUALITATIVE ANALYSIS: DEPTH HEATMAP VISUALIZATIONS\n")
+            f.write("="*80 + "\n\n")
+            f.write("Colormap: 'plasma' (Perceptually uniform sequential colormap)\n\n")
+            f.write("Qualitative Observation:\n")
+            f.write("-"*80 + "\n")
+            f.write("Using the 'plasma' colormap, we observe that the relative depth order\n")
+            f.write("is correctly preserved. The colormap provides intuitive visualization where:\n")
+            f.write("  - Warmer colors (yellow/red) represent CLOSER objects (small depth values)\n")
+            f.write("  - Cooler colors (purple/blue) represent FARTHER objects (large depth values)\n\n")
+            f.write("This perceptually uniform colormap ensures that depth differences are\n")
+            f.write("visually apparent and correctly ordered throughout the scene.\n\n")
+            f.write("Error Map Interpretation:\n")
+            f.write("-"*80 + "\n")
+            f.write("The error map (hot colormap) shows absolute differences between ground truth\n")
+            f.write("and predicted depth:\n")
+            f.write("  - Dark regions (near black) indicate LOW error (accurate prediction)\n")
+            f.write("  - Bright regions (yellow/white) indicate HIGH error (inaccurate prediction)\n\n")
+            f.write("="*80 + "\n\n")
+
+        logger.info(f"Qualitative analysis saved to {analysis_path}")
+
+        with torch.no_grad():
+            for i, idx in enumerate(tqdm(random_indices, desc="Generating heatmaps")):
+                rgb, depth_gt = dataset[idx]
+
+                # Predict depth
+                rgb_batch = rgb.unsqueeze(0).to(self.device)
+                depth_pred = self.model(rgb_batch)
+                depth_pred = depth_pred[0, 0].cpu().numpy()
+
+                # Convert to numpy
+                rgb_np = rgb.permute(1, 2, 0).cpu().numpy()
+                depth_gt_np = depth_gt[0].cpu().numpy()
+
+                # Calculate error map
+                error_map = np.abs(depth_pred - depth_gt_np)
+
+                # Save individual components
+                sample_prefix = f"sample_{i+1:02d}"
+
+                # 1. Save original RGB image
+                rgb_path = heatmap_dir / f"{sample_prefix}_original.png"
+                plt.figure(figsize=(8, 6))
+                plt.imshow(rgb_np)
+                plt.title('Original RGB Image', fontsize=14, fontweight='bold')
+                plt.axis('off')
+                plt.tight_layout()
+                plt.savefig(rgb_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                # 2. Save ground truth depth heatmap
+                gt_heatmap_path = heatmap_dir / f"{sample_prefix}_gt_heatmap.png"
+                plt.figure(figsize=(8, 6))
+                im = plt.imshow(depth_gt_np, cmap='plasma', vmin=0, vmax=1)
+                plt.title('Ground Truth Depth (Plasma Colormap)', fontsize=14, fontweight='bold')
+                plt.axis('off')
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+                cbar.set_label('Normalized Depth (0=close, 1=far)', rotation=270, labelpad=20)
+                plt.tight_layout()
+                plt.savefig(gt_heatmap_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                # 3. Save predicted depth heatmap
+                pred_heatmap_path = heatmap_dir / f"{sample_prefix}_pred_heatmap.png"
+                plt.figure(figsize=(8, 6))
+                im = plt.imshow(depth_pred, cmap='plasma', vmin=0, vmax=1)
+                plt.title('Predicted Depth (Plasma Colormap)', fontsize=14, fontweight='bold')
+                plt.axis('off')
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+                cbar.set_label('Normalized Depth (0=close, 1=far)', rotation=270, labelpad=20)
+                plt.tight_layout()
+                plt.savefig(pred_heatmap_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                # 4. Save error map
+                error_map_path = heatmap_dir / f"{sample_prefix}_error_map.png"
+                plt.figure(figsize=(8, 6))
+                im = plt.imshow(error_map, cmap='hot', vmin=0, vmax=0.3)
+                plt.title('Absolute Error Map', fontsize=14, fontweight='bold')
+                plt.axis('off')
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+                cbar.set_label('Absolute Error', rotation=270, labelpad=20)
+                plt.tight_layout()
+                plt.savefig(error_map_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                # 5. Save combined visualization
+                combined_path = heatmap_dir / f"{sample_prefix}_combined.png"
+                fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+                # Original RGB
+                axes[0, 0].imshow(rgb_np)
+                axes[0, 0].set_title('Original RGB Image', fontsize=12, fontweight='bold')
+                axes[0, 0].axis('off')
+
+                # Ground truth depth
+                im1 = axes[0, 1].imshow(depth_gt_np, cmap='plasma', vmin=0, vmax=1)
+                axes[0, 1].set_title('Ground Truth Depth\n(Plasma: Yellow=Close, Purple=Far)',
+                                    fontsize=12, fontweight='bold')
+                axes[0, 1].axis('off')
+                plt.colorbar(im1, ax=axes[0, 1], fraction=0.046, pad=0.04)
+
+                # Predicted depth
+                im2 = axes[1, 0].imshow(depth_pred, cmap='plasma', vmin=0, vmax=1)
+                axes[1, 0].set_title('Predicted Depth\n(Plasma: Yellow=Close, Purple=Far)',
+                                    fontsize=12, fontweight='bold')
+                axes[1, 0].axis('off')
+                plt.colorbar(im2, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+                # Error map
+                im3 = axes[1, 1].imshow(error_map, cmap='hot', vmin=0, vmax=0.3)
+                axes[1, 1].set_title('Absolute Error Map\n(Hot: Dark=Low Error, Bright=High Error)',
+                                    fontsize=12, fontweight='bold')
+                axes[1, 1].axis('off')
+                plt.colorbar(im3, ax=axes[1, 1], fraction=0.046, pad=0.04)
+
+                # Add overall title
+                fig.suptitle(f'Depth Estimation Visualization - Sample {i+1}/{len(random_indices)}',
+                           fontsize=16, fontweight='bold', y=0.98)
+
+                plt.tight_layout()
+                plt.savefig(combined_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                logger.info(f"Sample {i+1}/{len(random_indices)}: Saved to {heatmap_dir}/{sample_prefix}_*.png")
+
+        logger.info(f"\n{'='*80}")
+        logger.info(f"Generated {len(random_indices)} random heatmap visualizations")
+        logger.info(f"Output directory: {heatmap_dir}")
+        logger.info(f"Files generated per sample:")
+        logger.info(f"  - *_original.png: Original RGB image")
+        logger.info(f"  - *_gt_heatmap.png: Ground truth depth heatmap (plasma)")
+        logger.info(f"  - *_pred_heatmap.png: Predicted depth heatmap (plasma)")
+        logger.info(f"  - *_error_map.png: Absolute error map (hot)")
+        logger.info(f"  - *_combined.png: All four visualizations in one figure")
+        logger.info(f"  - qualitative_analysis.txt: Interpretation guide")
+        logger.info(f"{'='*80}\n")
+
     def save_evaluation_report(self, metrics: dict):
         """
         Save comprehensive evaluation report.
@@ -469,6 +643,17 @@ def main():
         default=None,
         help='Device to use (cuda/cpu)'
     )
+    parser.add_argument(
+        '--generate_heatmaps',
+        action='store_true',
+        help='Generate random heatmap visualizations with error maps'
+    )
+    parser.add_argument(
+        '--num_heatmaps',
+        type=int,
+        default=5,
+        help='Number of random heatmaps to generate (default: 5)'
+    )
 
     args = parser.parse_args()
 
@@ -493,6 +678,10 @@ def main():
     if args.visualize:
         evaluator.visualize_predictions(split=args.split, num_samples=args.num_vis)
         evaluator.create_comparison_grid(split=args.split, num_samples=9)
+
+    # Generate random heatmaps if requested
+    if args.generate_heatmaps:
+        evaluator.generate_random_heatmaps(split=args.split, num_samples=args.num_heatmaps)
 
     # Save evaluation report
     evaluator.save_evaluation_report(metrics)

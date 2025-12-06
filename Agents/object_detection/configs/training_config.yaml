@@ -8,8 +8,8 @@ model:
 
 # Dataset Configuration
 data:
-  yaml_path: "./data/sunrgbd_6classes/sunrgbd_6classes.yaml"  # Updated for 6-class filtered dataset
-  img_size: 640
+  yaml_path: "../data/sunrgbd_6classes/sunrgbd_6classes.yaml"  # Updated for 6-class filtered dataset
+  img_size: 1024 # 640
   cache: false  # Cache images for faster training (requires more RAM)
   augment: true
 
@@ -17,19 +17,19 @@ data:
 training:
   epochs: 100
   batch_size: 16  # Will be auto-adjusted based on GPU memory
-  optimizer: "AdamW"  # SGD, Adam, AdamW
-  lr0: 0.001  # Initial learning rate
+  optimizer: SGD # "AdamW"  # SGD, Adam, AdamW
+  lr0: 0.01  # Initial learning rate
   lrf: 0.01  # Final learning rate (lr0 * lrf)
   momentum: 0.937  # SGD momentum/Adam beta1
   weight_decay: 0.0005  # Optimizer weight decay
-  warmup_epochs: 3  # Warmup epochs
+  warmup_epochs: 10  # Warmup epochs
   warmup_momentum: 0.8  # Warmup initial momentum
   warmup_bias_lr: 0.1  # Warmup initial bias learning rate
 
 # Learning Rate Scheduler
 scheduler:
   type: "cosine"  # linear, cosine, or step
-  patience: 50  # Epochs to wait for no improvement (for ReduceLROnPlateau)
+  patience: 20  # Epochs to wait for no improvement (for ReduceLROnPlateau)
 
 # Data Augmentation (for YOLOv8 built-in augmentation)
 augmentation:
@@ -79,13 +79,13 @@ logging:
 validation:
   save_json: true  # Save results to JSON
   save_hybrid: false  # Save hybrid version for both speed and accuracy
-  conf_thres: 0.25  # Confidence threshold
+  conf_thres: 0.6 # increase 0.25  # Confidence threshold
   iou_thres: 0.45  # NMS IoU threshold
   max_det: 300  # Maximum detections per image
 
 # Testing/Inference Configuration
 inference:
-  conf_thres: 0.25  # Confidence threshold for predictions
+  conf_thres: 0.6  # Confidence threshold for predictions
   iou_thres: 0.45  # NMS IoU threshold
   max_det: 300  # Maximum detections per image
   save_txt: true  # Save results to text files
