@@ -211,5 +211,15 @@ __marimo__/
 
 # Test Data
 SUNRGBD/
+SUNRGBD.zip
 .DS_Store
 .claude/
+
+# Agents
+Agents/object_detection/training/
+Agents/object_detection/sunrgbd_detection/
+*.pt
+Agents/object_detection/Agents/
+Agents/distance_calculator/data_prepare/
+Agents/distance_calculator/logs/
+Agents/distance_calculator/models/
