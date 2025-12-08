@@ -1,0 +1,101 @@
+# Training Configuration for SUN RGB-D Object Detection
+
+# Model Configuration
+model:
+  name: "yolov8s"  # yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
+  pretrained: true
+  freeze_backbone: false  # Set to true to freeze backbone layers
+
+# Dataset Configuration
+data:
+  yaml_path: "../data/sunrgbd_6classes/sunrgbd_6classes.yaml"  # Updated for 6-class filtered dataset
+  img_size: 1024 # 640
+  cache: false  # Cache images for faster training (requires more RAM)
+  augment: true
+
+# Training Hyperparameters
+training:
+  epochs: 100
+  batch_size: 16  # Will be auto-adjusted based on GPU memory
+  optimizer: SGD # "AdamW"  # SGD, Adam, AdamW
+  lr0: 0.01  # Initial learning rate
+  lrf: 0.01  # Final learning rate (lr0 * lrf)
+  momentum: 0.937  # SGD momentum/Adam beta1
+  weight_decay: 0.0005  # Optimizer weight decay
+  warmup_epochs: 10  # Warmup epochs
+  warmup_momentum: 0.8  # Warmup initial momentum
+  warmup_bias_lr: 0.1  # Warmup initial bias learning rate
+
+# Learning Rate Scheduler
+scheduler:
+  type: "cosine"  # linear, cosine, or step
+  patience: 20  # Epochs to wait for no improvement (for ReduceLROnPlateau)
+
+# Data Augmentation (for YOLOv8 built-in augmentation)
+augmentation:
+  hsv_h: 0.015  # HSV-Hue augmentation (fraction)
+  hsv_s: 0.7  # HSV-Saturation augmentation (fraction)
+  hsv_v: 0.4  # HSV-Value augmentation (fraction)
+  degrees: 10.0  # Rotation (+/- deg)
+  translate: 0.1  # Translation (+/- fraction)
+  scale: 0.5  # Scale (+/- gain)
+  shear: 2.0  # Shear (+/- deg)
+  perspective: 0.0  # Perspective (+/- fraction)
+  flipud: 0.0  # Flip up-down probability
+  fliplr: 0.5  # Flip left-right probability
+  mosaic: 1.0  # Mosaic augmentation probability
+  mixup: 0.1  # MixUp augmentation probability
+  copy_paste: 0.0  # Copy-paste augmentation probability
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 20  # Epochs to wait for improvement
+  min_delta: 0.001  # Minimum change to qualify as improvement
+
+# Model Checkpointing
+checkpointing:
+  save_period: 5  # Save checkpoint every N epochs
+  save_best_only: true  # Only save best models
+  monitor: "metrics/mAP50-95(B)"  # Metric to monitor
+
+# Hardware Configuration
+hardware:
+  device: "auto"  # auto, cpu, 0, 1, 2, etc. (GPU ids)
+  workers: 8  # Number of dataloader workers
+  amp: true  # Automatic Mixed Precision training
+
+# Logging Configuration
+logging:
+  project: "sunrgbd_6classes_detection"  # Updated for 6-class dataset
+  name: "yolov8s_6classes"  # Updated experiment name
+  wandb: false  # Enable Weights & Biases logging
+  tensorboard: true  # Enable TensorBoard logging
+  save_dir: "./Agents/models"
+  verbose: true
+  plots: true  # Save training plots
+
+# Validation Configuration
+validation:
+  save_json: true  # Save results to JSON
+  save_hybrid: false  # Save hybrid version for both speed and accuracy
+  conf_thres: 0.6 # increase 0.25  # Confidence threshold
+  iou_thres: 0.45  # NMS IoU threshold
+  max_det: 300  # Maximum detections per image
+
+# Testing/Inference Configuration
+inference:
+  conf_thres: 0.6  # Confidence threshold for predictions
+  iou_thres: 0.45  # NMS IoU threshold
+  max_det: 300  # Maximum detections per image
+  save_txt: true  # Save results to text files
+  save_conf: true  # Save confidences in text files
+  save_crop: false  # Save cropped prediction boxes
+  show_labels: true  # Show labels on predictions
+  show_conf: true  # Show confidences on predictions
+  line_width: 2  # Bounding box line width
+
+# Benchmark Configuration
+benchmark:
+  warmup_runs: 10  # Number of warmup inference runs
+  benchmark_runs: 100  # Number of benchmark inference runs
