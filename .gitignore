@@ -223,3 +223,4 @@ Agents/object_detection/Agents/
 Agents/distance_calculator/data_prepare/
 Agents/distance_calculator/logs/
 Agents/distance_calculator/models/
+*.md

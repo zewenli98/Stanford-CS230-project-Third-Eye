@@ -14,9 +14,13 @@ import logging
 from typing import Dict, List, Tuple, Optional
 import argparse
 import pandas as pd
+import csv
 from dataclasses import dataclass, asdict
 import matplotlib.pyplot as plt
 from collections import deque
+
+# Configure query path - UPDATE THIS BEFORE RUNNING
+QUERY_PATH = "../queries-sample10/"  # User should set to "./queries/" or "./queries-sample10/"
 
 # Configure logging
 logging.basicConfig(
@@ -379,132 +383,6 @@ class PathFinder:
         bev_z = max(0, min(bev_z, grid_res - 1))
 
         return bev_x, bev_z
-
-    def find_reachable_position(self, depth_map: np.ndarray,
-                                bbox: Tuple[int, int, int, int],
-                                target_distance: float) -> Optional[Dict[str, int]]:
-        """
-        Find a reachable position near the object.
-
-        Args:
-            depth_map: Depth image in meters
-            bbox: Object bounding box
-            target_distance: Target distance to reach
-
-        Returns:
-            Dictionary with x, y pixel coordinates of reachable position
-        """
-        x1, y1, x2, y2 = bbox
-        h, w = depth_map.shape
-
-        # Center of object
-        obj_center_x = (x1 + x2) // 2
-        obj_center_y = (y1 + y2) // 2
-
-        # Search for positions within arm's reach
-        search_radius = 50  # pixels
-
-        best_position = None
-        min_distance_diff = float('inf')
-
-        for dy in range(-search_radius, search_radius, 5):
-            for dx in range(-search_radius, search_radius, 5):
-                px = obj_center_x + dx
-                py = obj_center_y + dy
-
-                # Check bounds
-                if px < 0 or px >= w or py < 0 or py >= h:
-                    continue
-
-                # Get depth at this position
-                depth = depth_map[py, px]
-
-                if depth <= 0:
-                    continue
-
-                # Check if this position is close to target distance
-                distance_diff = abs(depth - target_distance)
-
-                if distance_diff < min_distance_diff:
-                    min_distance_diff = distance_diff
-                    best_position = {'x': int(px), 'y': int(py)}
-
-        return best_position
-
-    def create_occupancy_grid(self, depth_map: np.ndarray) -> np.ndarray:
-        """
-        Create occupancy grid from depth map for path planning.
-
-        Args:
-            depth_map: Depth image in meters
-
-        Returns:
-            Occupancy grid (0 = free, 1 = occupied)
-        """
-        # Resize depth map to grid resolution
-        h, w = depth_map.shape
-        grid_h = h // 10  # Downsample for efficiency
-        grid_w = w // 10
-
-        # Create grid
-        grid = np.zeros((grid_h, grid_w), dtype=np.uint8)
-
-        # Mark obstacles (too close or invalid depth)
-        for gy in range(grid_h):
-            for gx in range(grid_w):
-                # Sample depth at this grid cell
-                py = min(gy * 10, h - 1)
-                px = min(gx * 10, w - 1)
-
-                depth = depth_map[py, px]
-
-                # Mark as obstacle if too close or no depth
-                if depth <= 0 or depth < self.SAFE_DISTANCE_THRESHOLD:
-                    grid[gy, gx] = 1
-
-        return grid
-
-    def find_safe_path(self, depth_map: np.ndarray,
-                      start_pos: Dict[str, int],
-                      goal_pos: Dict[str, int]) -> List[Dict]:
-        """
-        Find safe path using A* algorithm.
-
-        Args:
-            depth_map: Depth image in meters
-            start_pos: Start position {x, y}
-            goal_pos: Goal position {x, y}
-
-        Returns:
-            List of waypoints as dictionaries with x, y, action
-        """
-        # Create occupancy grid
-        grid = self.create_occupancy_grid(depth_map)
-        grid_h, grid_w = grid.shape
-
-        # Convert positions to grid coordinates
-        start_gx = start_pos['x'] // 10
-        start_gy = start_pos['y'] // 10
-        goal_gx = goal_pos['x'] // 10
-        goal_gy = goal_pos['y'] // 10
-
-        # Clamp to grid bounds
-        start_gx = max(0, min(start_gx, grid_w - 1))
-        start_gy = max(0, min(start_gy, grid_h - 1))
-        goal_gx = max(0, min(goal_gx, grid_w - 1))
-        goal_gy = max(0, min(goal_gy, grid_h - 1))
-
-        # A* pathfinding
-        path = self.astar(grid, (start_gx, start_gy), (goal_gx, goal_gy))
-
-        if path is None:
-            logger.warning("No safe path found")
-            return []
-
-        # Convert path to navigation steps
-        steps = self.path_to_steps(path, depth_map)
-
-        return steps
 
     def astar(self, grid: np.ndarray, start: Tuple[int, int],
              goal: Tuple[int, int]) -> Optional[List[Tuple[int, int]]]:
@@ -902,116 +780,220 @@ class PathFinder:
         logger.info(f"JSON saved to {output_path}")
 
 
-def main():
-    """Main function."""
-    parser = argparse.ArgumentParser(description="PathFinder for Blind Navigation")
-    parser.add_argument('--rgb_image', type=str, help='Path to RGB image')
-    parser.add_argument('--depth_image', type=str, help='Path to depth image')
-    parser.add_argument('--object', type=str, help='Object name')
-    parser.add_argument('--bbox', type=str, help='Bounding box "[x1, y1, x2, y2]"')
-    parser.add_argument('--csv_file', type=str, default='../queries/prompts.csv',
-                       help='CSV file with queries')
-    parser.add_argument('--process_all', action='store_true',
-                       help='Process all queries in CSV')
-    parser.add_argument('--limit', type=int, default=10,
-                       help='Limit number of queries to process')
-    parser.add_argument('--output_dir', type=str, default='./Agents/pathfinder_outputs',
-                       help='Output directory')
-    parser.add_argument('--visualize', action='store_true',
-                       help='Generate visualizations')
+def load_target_predictions(query_path: str) -> Dict[int, Tuple[str, str]]:
+    """
+    Load target predictions from target_prediction.txt.
 
-    args = parser.parse_args()
+    Args:
+        query_path: Path to queries folder
 
-    # Create pathfinder
-    pathfinder = PathFinder(output_dir=args.output_dir)
+    Returns:
+        Dictionary mapping prompt_id to (object_name, bbox_str)
+    """
+    target_file = os.path.join(query_path, "target_prediction.txt")
 
-    if args.process_all:
-        # Process CSV file
-        logger.info(f"Loading queries from {args.csv_file}")
-        df = pd.read_csv(args.csv_file)
+    if not os.path.exists(target_file):
+        raise FileNotFoundError(f"target_prediction.txt not found at {target_file}")
 
-        # Limit queries
-        df = df.head(args.limit)
+    targets = {}
+    with open(target_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
 
-        logger.info(f"Processing {len(df)} queries...")
+            # Parse: prompt_id,object,bbox
+            parts = line.split(',', 2)  # Split into max 3 parts
+            if len(parts) == 3:
+                prompt_id = int(parts[0])
+                object_name = parts[1]
+                bbox_str = parts[2]
+                targets[prompt_id] = (object_name, bbox_str)
 
-        for idx, row in df.iterrows():
-            try:
-                # Get paths
-                rgb_path = f"./queries/images/{row['image_name']}"
-                depth_path = f"./queries/images/{row['depth_image']}"
+    logger.info(f"Loaded {len(targets)} target predictions")
+    return targets
 
-                # Process query
-                instruction = pathfinder.process_query(
-                    rgb_path=rgb_path,
-                    depth_path=depth_path,
-                    object_name=row['object'],
-                    bbox_str=row['object_bbox']
-                )
 
-                # Save JSON
-                output_name = f"query_{row['prompt_id']:04d}_{row['object']}"
-                pathfinder.save_json(instruction, output_name)
+def load_prompts_info(query_path: str) -> Dict[int, Dict]:
+    """
+    Load prompt information from prompts.csv.
 
-                # Visualize if requested
-                if args.visualize:
-                    pathfinder.visualize_navigation(
-                        rgb_path, depth_path, instruction,
-                        row['object_bbox'], output_name
-                    )
+    Args:
+        query_path: Path to queries folder
 
-                logger.info(f"Processed query {row['prompt_id']}: {row['object']}")
+    Returns:
+        Dictionary mapping prompt_id to {image_name, object}
+    """
+    csv_path = os.path.join(query_path, "prompts.csv")
 
-            except Exception as e:
-                logger.error(f"Error processing query {row['prompt_id']}: {e}")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"prompts.csv not found at {csv_path}")
 
-    else:
-        # Process single query
-        if not all([args.rgb_image, args.depth_image, args.object, args.bbox]):
-            logger.error("Please provide --rgb_image, --depth_image, --object, and --bbox")
-            return
+    prompts = {}
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            prompt_id = int(row['prompt_id'])
+            prompts[prompt_id] = {
+                'image_name': row.get('image_name', ''),
+                'object': row.get('object', '')
+            }
 
-        instruction = pathfinder.process_query(
-            rgb_path=args.rgb_image,
-            depth_path=args.depth_image,
-            object_name=args.object,
-            bbox_str=args.bbox
-        )
+    logger.info(f"Loaded {len(prompts)} prompts from CSV")
+    return prompts
 
-        # Save JSON
-        pathfinder.save_json(instruction, f"{args.object}_navigation")
 
-        # Visualize if requested
-        if args.visualize:
-            pathfinder.visualize_navigation(
-                args.rgb_image, args.depth_image, instruction,
-                args.bbox, f"{args.object}_navigation"
+def get_depth_image_name(rgb_image_name: str) -> str:
+    """
+    Generate depth image name from RGB image name.
+
+    Args:
+        rgb_image_name: RGB image filename
+
+    Returns:
+        Depth image filename
+    """
+    # Remove extension and add _depth.png
+    base_name = os.path.splitext(rgb_image_name)[0]
+    return f"{base_name}_depth.png"
+
+
+def process_all_queries(query_path: str):
+    """
+    Process all queries and generate pathfinder_output.csv.
+
+    Args:
+        query_path: Path to queries folder
+    """
+    logger.info("="*80)
+    logger.info("PATHFINDER - BATCH PROCESSING")
+    logger.info("="*80)
+
+    # Load target predictions and prompts
+    targets = load_target_predictions(query_path)
+    prompts_info = load_prompts_info(query_path)
+
+    # Initialize pathfinder
+    output_dir = os.path.join(query_path, "pathfinder_outputs")
+    pathfinder = PathFinder(output_dir=output_dir)
+
+    # Process each query
+    results = []
+
+    for prompt_id in sorted(targets.keys()):
+        try:
+            # Get target info
+            object_name, bbox_str = targets[prompt_id]
+
+            # Get prompt info
+            if prompt_id not in prompts_info:
+                logger.warning(f"Prompt {prompt_id} not found in prompts.csv, skipping")
+                continue
+
+            image_name = prompts_info[prompt_id]['image_name']
+
+            # Construct paths
+            rgb_path = os.path.join(query_path, "images", image_name)
+            depth_image_name = get_depth_image_name(image_name)
+            depth_path = os.path.join(query_path, "generated_images", depth_image_name)
+
+            # Check if files exist
+            if not os.path.exists(rgb_path):
+                logger.warning(f"RGB image not found: {rgb_path}, skipping")
+                continue
+
+            if not os.path.exists(depth_path):
+                logger.warning(f"Depth image not found: {depth_path}, skipping")
+                continue
+
+            # Process query
+            logger.info(f"Processing query {prompt_id}: {object_name}")
+            instruction = pathfinder.process_query(
+                rgb_path=rgb_path,
+                depth_path=depth_path,
+                object_name=object_name,
+                bbox_str=bbox_str,
+                annotation_json=None  # Don't use annotations
             )
 
-        # Print result
-        print("\n" + "="*80)
-        print("NAVIGATION INSTRUCTION")
-        print("="*80)
-        print(f"Object: {instruction.object_name}")
-        print(f"Distance: {instruction.distance_meters} meters")
-        print(f"Direction: {instruction.direction_clock} ({instruction.direction_degrees}°)")
-        print(f"Fetchable: <isFetchable>{instruction.is_fetchable}</isFetchable>")
+            # Format waypoints as string
+            waypoints_str = ""
+            if instruction.waypoints:
+                waypoint_parts = []
+                for wp in instruction.waypoints:
+                    waypoint_parts.append(f"{wp['direction']}:{wp['distance']}m")
+                waypoints_str = "; ".join(waypoint_parts)
 
-        if instruction.is_fetchable:
-            print("\n✓ Object is within reach! You can fetch it directly.")
-        elif instruction.waypoints:
-            print(f"\n📍 Navigation Waypoints ({len(instruction.waypoints)} waypoints):")
-            for i, waypoint in enumerate(instruction.waypoints, 1):
-                print(f"  {i}. Direction: {waypoint['direction']}, Distance: {waypoint['distance']}m")
-        else:
-            print("\n⚠ No path available to object")
+            # Format warnings as string
+            warnings_str = ""
+            if instruction.warnings:
+                warnings_str = "; ".join(instruction.warnings)
 
-        if instruction.warnings:
-            print(f"\nWarnings:")
-            for warning in instruction.warnings:
-                print(f"  - {warning}")
+            # Store result
+            result = {
+                'prompt_id': prompt_id,
+                'object_name': object_name,
+                'distance_meters': instruction.distance_meters,
+                'direction_clock': instruction.direction_clock,
+                'direction_degrees': instruction.direction_degrees,
+                'is_fetchable': instruction.is_fetchable,
+                'waypoints': waypoints_str,
+                'warnings': warnings_str
+            }
+            results.append(result)
 
-        print("="*80)
+            logger.info(f"  ✓ {object_name}: {instruction.distance_meters}m, {instruction.direction_clock}")
+
+        except Exception as e:
+            logger.error(f"Error processing query {prompt_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    # Save results to CSV
+    output_csv = os.path.join(query_path, "pathfinder_output.csv")
+
+    if results:
+        fieldnames = ['prompt_id', 'object_name', 'distance_meters', 'direction_clock',
+                     'direction_degrees', 'is_fetchable', 'waypoints', 'warnings']
+
+        with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(results)
+
+        logger.info(f"\n{'='*80}")
+        logger.info(f"✓ Successfully processed {len(results)} queries")
+        logger.info(f"✓ Results saved to: {output_csv}")
+        logger.info(f"{'='*80}")
+    else:
+        logger.warning("No queries were successfully processed")
+
+
+def main():
+    """Main function - simplified batch processing."""
+
+    # Check if QUERY_PATH is set
+    if QUERY_PATH == "place holder":
+        logger.error("="*80)
+        logger.error("ERROR: QUERY_PATH is not configured!")
+        logger.error("="*80)
+        logger.error("Please edit pathfinder.py and set QUERY_PATH at the top of the file.")
+        logger.error("Example: QUERY_PATH = './queries/' or '../queries-sample10/'")
+        logger.error("="*80)
+        return
+
+    # Validate QUERY_PATH exists
+    if not os.path.exists(QUERY_PATH):
+        logger.error(f"ERROR: QUERY_PATH does not exist: {QUERY_PATH}")
+        return
+
+    # Process all queries
+    try:
+        process_all_queries(QUERY_PATH)
+    except Exception as e:
+        logger.error(f"Error during processing: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 if __name__ == "__main__":

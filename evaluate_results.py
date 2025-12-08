@@ -26,18 +26,9 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # CONFIGURATION - Configure these settings
 # ============================================================================
 RESULTS_CSV_FILES = [
-    "results_._finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_095202.csv",
-    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_095053.csv",
-    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094943.csv",
-    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094839.csv",
-    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094729.csv",
-    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094500.csv",
-    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094229.csv",
-    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094000.csv",
-    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_093404.csv",
-    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_093035.csv",
+    "agent_results_Qwen_Qwen2.5-VL-7B-Instruct_20251206_064815.csv"
     ] # Name of the results CSV file to evaluate
-RESULTS_FOLDER = "./results_1130"  # Folder containing results files
+RESULTS_FOLDER = "./agent-results/"  # Folder containing results files
 # ============================================================================
 
 EVALUATION_METRICS = {
@@ -166,9 +157,10 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     Returns:
         ExtractedResponse object with parsed information
     """
+    # Check that required fields exist in the row (but allow empty values for negative samples)
     required_fields = ['prompt_id', 'annotation', 'prompt_text', 'image_name', 'model_name', 'llm_response', 'object', 'object_distance', 'object_direction', 'scene', 'object_bbox']
     for field in required_fields:
-        if not row.get(field):
+        if field not in row:
             raise ValueError(f"Required field {field} is not present in row: {row}")
 
     # Extract basic fields
@@ -178,7 +170,11 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     model_name = row.get('model_name', '')
     raw_response = row.get('llm_response', '')
     gt_object = row.get('object', '')
-    gt_object_distance = float(row.get('object_distance', 0))
+
+    # Handle object_distance - may be empty string for negative samples
+    object_distance_str = row.get('object_distance', '0')
+    gt_object_distance = float(object_distance_str) if object_distance_str and object_distance_str.strip() else 0.0
+
     gt_object_direction = row.get('object_direction', '')
     gt_scene = row.get('scene', '')
     gt_object_bbox = row.get('object_bbox', '[]')
@@ -222,8 +218,25 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
         # Extract distance and direction
         distance_direction = json_data.get('distance_and_direction_from_camera', {})
         if distance_direction:
-            extracted.predicted_distance_meters = distance_direction.get('distance_meters')
-            extracted.predicted_direction_o_clock = distance_direction.get('direction_o_clock')
+            # Convert distance to float, handling string values and None
+            distance_value = distance_direction.get('distance_meters')
+            if distance_value is not None:
+                try:
+                    extracted.predicted_distance_meters = float(distance_value)
+                except (ValueError, TypeError):
+                    extracted.predicted_distance_meters = None
+            else:
+                extracted.predicted_distance_meters = None
+
+            # Convert direction to int, handling string values and None
+            direction_value = distance_direction.get('direction_o_clock')
+            if direction_value is not None:
+                try:
+                    extracted.predicted_direction_o_clock = int(direction_value)
+                except (ValueError, TypeError):
+                    extracted.predicted_direction_o_clock = None
+            else:
+                extracted.predicted_direction_o_clock = None
 
         # Extract navigation instructions
         nav_instructions = json_data.get('navigation_instructions')

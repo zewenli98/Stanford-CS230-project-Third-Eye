@@ -1,9 +1,8 @@
 import os
-import sys
 import csv
 import base64
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 import logging
@@ -15,10 +14,6 @@ import json
 from tqdm import tqdm
 import gc
 from peft import PeftModel
-
-# Add Agents directory to path for pathfinder import
-sys.path.append(str(Path(__file__).parent / 'Agents'))
-from pathfinder import PathFinder, NavigationInstruction
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -319,71 +314,25 @@ def load_queries_from_local(
     logger.info(f"Loaded {len(queries)} queries successfully")
     return queries
 
-def update_prompt_context(prompt: str, navigation_info: Optional[NavigationInstruction] = None) -> str:
-    """
-    Update prompt with context and optional pathfinding navigation information.
-
-    Args:
-        prompt: Original user prompt
-        navigation_info: Optional NavigationInstruction from pathfinder
-
-    Returns:
-        Enhanced prompt with context
-    """
+def update_prompt_context(prompt: str) -> str:
     context_prompt = """
-        **Role:**
+        **Role:**  
         You are a visual-navigation assistant AI designed to help a blind user locate and retrieve objects using a single image.
 
-        **High-Level Task:**
-        The user will upload an image of their surroundings and ask you to find a specific object.
+        **High-Level Task:**  
+        The user will upload an image of their surroundings and ask you to find a specific object.  
         Your job is to:
-        1. Decide whether the target object is visible in the image.
-        2. If visible, describe its position in the image and its approximate direction and distance from the camera.
+        1. Decide whether the target object is visible in the image.  
+        2. If visible, describe its position in the image and its approximate direction and distance from the camera.  
         3. Provide clear, discrete movement instructions the user can follow without seeing anything.
-        4. Explain how to position and move the user's hand to grab the object once they are close.
+        4. Explain how to position and move the user's hand to grab the object once they are close.  
         5. If the object is not visible or the scene is too ambiguous for safe guidance, say so clearly and propose how to retake the photo.
-
+        
         **You must:**
         - Be honest about uncertainty.
         - Never invent objects that are not clearly visible.
         - Prefer safety over brevity; avoid suggesting fast or risky movements.
         - Assume the user is standing where the photo was taken and facing the same direction as the camera.
-    """
-
-    # Add pathfinding spatial information if available
-    if navigation_info is not None:
-        pathfinding_context = f"""
-
-        **PATHFINDING SPATIAL INFORMATION (from depth sensor and navigation system):**
-
-        - **Target Object:** {navigation_info.object_name}
-        - **Distance:** {navigation_info.distance_meters} meters from camera
-        - **Direction:** {navigation_info.direction_clock} o'clock position ({navigation_info.direction_degrees} degrees)
-        - **Fetchable:** {"Yes - within arm's reach" if navigation_info.is_fetchable else "No - requires walking"}
-        """
-
-        if navigation_info.waypoints:
-            pathfinding_context += f"""
-        - **Navigation Waypoints:** {len(navigation_info.waypoints)} waypoint(s) calculated for safe path
-        """
-            for i, wp in enumerate(navigation_info.waypoints):
-                pathfinding_context += f"""
-          {i+1}. Move {wp['direction']} for {wp['distance']:.2f} meters
-        """
-
-        if navigation_info.warnings:
-            pathfinding_context += f"""
-        - **Warnings:** {'; '.join(navigation_info.warnings)}
-        """
-
-        pathfinding_context += """
-
-        **USE THIS SPATIAL INFORMATION** to provide accurate distance, direction, and navigation guidance.
-        """
-
-        context_prompt += pathfinding_context
-
-    context_prompt += """
 
         ---
 
@@ -583,200 +532,12 @@ def eval(
         logger.info("------------------------------------------------\n")
     return output_paths
 
-def eval_with_agent(
-    model_processor_name_dict: Dict[str, str],
-    csv_path: str = "queries/prompts.csv",
-    images_folder: str = "queries/images",
-    output_folder: str = "agent_results",
-    device: str = None
-) -> Dict[str, str]:
-    """
-    Evaluate multiple models with pathfinding agent integration.
-
-    This function adds pathfinding spatial information before calling LLM.
-
-    Args:
-        model_processor_name_dict: Dictionary of model names/paths to processor names/paths
-        csv_path: Path to CSV file with prompts
-        images_folder: Path to images folder (contains both RGB and depth images)
-        output_folder: Folder to save result CSVs (default: agent_results)
-        device: Device to run models on ('cuda', 'cpu', or None for auto)
-
-    Returns:
-        Dictionary mapping model names to output CSV paths
-
-    Example:
-        model_processor_name_dict = {
-            "Qwen/Qwen2.5-VL-7B-Instruct": "Qwen/Qwen2.5-VL-7B-Instruct"
-        }
-        results = eval_with_agent(model_processor_name_dict)
-    """
-    model_names = list(model_processor_name_dict.keys())
-    processor_names = list(model_processor_name_dict.values())
-    logger.info(f"Starting AGENT MODE evaluation for models: {model_names}")
-
-    # Load queries once for all models
-    queries = load_queries_from_local(csv_path, images_folder)
-
-    if not queries:
-        logger.error("No queries loaded, exiting evaluation")
-        return {}
-
-    # Initialize PathFinder
-    pathfinder = PathFinder(output_dir="./Agents/pathfinder_outputs")
-    logger.info("PathFinder initialized")
-
-    # Ensure output folder exists
-    os.makedirs(output_folder, exist_ok=True)
-
-    # Initialize LLM processor
-    processor = LocalLLMProcessor(device=device)
-
-    # Process each model
-    output_paths = {}
-    model_responses = {}
-
-    for model_name, processor_name in zip(model_names, processor_names):
-        logger.info(f"\n{'='*50}")
-        logger.info(f"Evaluating model with AGENT MODE: {model_name}")
-        logger.info(f"{'='*50}")
-
-        try:
-            # Enhance queries with pathfinding information
-            enhanced_queries = []
-            for query in queries:
-                # Get pathfinding navigation instructions
-                navigation_info = None
-
-                # Check if we have required fields for pathfinding
-                if query.depth_image and query.object_bbox and query.object:
-                    try:
-                        # Construct paths (both RGB and depth are in the same folder)
-                        rgb_path = query.image_path
-                        depth_path = os.path.join(images_folder, query.depth_image)
-
-                        # Verify paths exist
-                        if os.path.exists(rgb_path) and os.path.exists(depth_path):
-                            # Call pathfinder
-                            navigation_info = pathfinder.process_query(
-                                rgb_path=rgb_path,
-                                depth_path=depth_path,
-                                object_name=query.object,
-                                bbox_str=query.object_bbox,
-                                annotation_json=query.annotation
-                            )
-                            logger.info(f"Pathfinding completed for query {query.prompt_id}: "
-                                      f"{navigation_info.object_name} at {navigation_info.distance_meters}m, "
-                                      f"{navigation_info.direction_clock} o'clock")
-                        else:
-                            logger.warning(f"Missing files for query {query.prompt_id}: "
-                                         f"RGB={os.path.exists(rgb_path)}, "
-                                         f"Depth={os.path.exists(depth_path)}")
-                    except Exception as e:
-                        logger.error(f"Pathfinding error for query {query.prompt_id}: {e}")
-                        navigation_info = None
-                else:
-                    logger.warning(f"Query {query.prompt_id} missing required fields for pathfinding")
-
-                # Enhance prompt with pathfinding info
-                enhanced_prompt = update_prompt_context(
-                    query.prompt_text.split('\n')[-1],  # Get original question
-                    navigation_info
-                )
-
-                # Create enhanced query
-                enhanced_query = Query(
-                    prompt_id=query.prompt_id,
-                    prompt_text=enhanced_prompt,
-                    image_name=query.image_name,
-                    image_path=query.image_path,
-                    image=query.image,
-                    object=query.object,
-                    object_distance=query.object_distance,
-                    object_direction=query.object_direction,
-                    scene=query.scene,
-                    object_bbox=query.object_bbox,
-                    annotation=query.annotation,
-                    depth_image=query.depth_image
-                )
-                enhanced_queries.append(enhanced_query)
-
-            # Call LLM with enhanced queries
-            logger.info(f"Calling LLM with {len(enhanced_queries)} enhanced queries")
-            responses = processor.call_llm_batch(model_name, processor_name, enhanced_queries)
-
-            # Create Result objects
-            results = []
-            for query, response in zip(queries, responses):
-                result = Result(
-                    prompt_id=query.prompt_id,
-                    prompt_text=query.prompt_text,
-                    image_name=query.image_name,
-                    model_name=model_name,
-                    response=response,
-                    # Include all additional fields from query
-                    object=query.object,
-                    object_distance=query.object_distance,
-                    object_direction=query.object_direction,
-                    scene=query.scene,
-                    object_bbox=query.object_bbox,
-                    annotation=query.annotation,
-                    depth_image=query.depth_image
-                )
-                results.append(result)
-            model_responses[model_name] = responses
-
-            # Save results to CSV
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_model_name = model_name.replace("/", "_").replace(":", "_").replace("\\", "_")
-            output_path = os.path.join(
-                output_folder,
-                f"agent_results_{safe_model_name}_{timestamp}.csv"
-            )
-
-            saved_path = save_results_to_csv(results, output_path)
-            output_paths[model_name] = saved_path
-
-            logger.info(f"Completed AGENT MODE evaluation for {model_name}")
-
-        except Exception as e:
-            logger.error(f"Error evaluating model {model_name} in AGENT MODE: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            output_paths[model_name] = None
-
-    # Summary
-    logger.info(f"\n{'='*50}")
-    logger.info("AGENT MODE Evaluation Summary:")
-    logger.info(f"{'='*50}")
-    for model_name, path in output_paths.items():
-        if path:
-            logger.info(f"✓ {model_name}: {path}")
-        else:
-            logger.info(f"✗ {model_name}: Failed")
-    logger.info("================ Model responses ================\n")
-    for i in range(len(queries)):
-        short_prompt = queries[i].prompt_text.split('\n')[-1]
-        logger.info(f"Query {i+1}: {short_prompt}")
-        for model_name, responses in model_responses.items():
-            logger.info(f"{model_name}: {responses[i]}")
-        logger.info("------------------------------------------------\n")
-    return output_paths
-
 def main():
-    import argparse
-
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Evaluate VLM models with optional pathfinding agent')
-    parser.add_argument('--agent_mode', action='store_true',
-                       help='Enable agent mode with pathfinding integration')
-    args = parser.parse_args()
-
     FULL_PARAMS_OPENSPACES_PROCESSOR = "./finetuned_models/full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/processor"
     FULL_PARAMS_SPACETHINKER_PROCESSOR = "./finetuned_models/full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor"
     LORA_OPENSPACES_PROCESSOR = "./finetuned_models/LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct/processor"
     LORA_SPACETHINKER_PROCESSOR = "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/processor"
-
+    
     model_processor_name_dict = {
         # TODO: change here
         "Qwen/Qwen2.5-VL-7B-Instruct": "Qwen/Qwen2.5-VL-7B-Instruct",
@@ -794,27 +555,14 @@ def main():
         "./finetuned_models/LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct/epoch-3": LORA_SPACETHINKER_PROCESSOR,
     }
 
-    # Run evaluation based on mode
-    if args.agent_mode:
-        logger.info("="*60)
-        logger.info("RUNNING IN AGENT MODE WITH PATHFINDING INTEGRATION")
-        logger.info("="*60)
-        results = eval_with_agent(
-            model_processor_name_dict=model_processor_name_dict,
-            device="cuda" if torch.cuda.is_available() else "cpu"
-        )
-        print("\nAgent mode evaluation complete!")
-        print("Results saved to agent_results folder:", results)
-    else:
-        logger.info("="*60)
-        logger.info("RUNNING IN DEFAULT MODE (no pathfinding)")
-        logger.info("="*60)
-        results = eval(
-            model_processor_name_dict=model_processor_name_dict,
-            device="cuda" if torch.cuda.is_available() else "cpu"
-        )
-        print("\nDefault mode evaluation complete!")
-        print("Results saved to results folder:", results)
+    # Run evaluation
+    results = eval(
+        model_processor_name_dict=model_processor_name_dict,
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    
+    print("\nEvaluation complete!")
+    print("Results saved to:", results)
 
 if __name__ == "__main__":
     main()
