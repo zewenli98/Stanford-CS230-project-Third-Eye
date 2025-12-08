@@ -12,6 +12,7 @@ from openai import OpenAI
 from PIL import Image
 import base64
 from io import BytesIO
+import time
 
 # Load environment variables
 load_dotenv()
@@ -26,18 +27,13 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # CONFIGURATION - Configure these settings
 # ============================================================================
 RESULTS_CSV_FILES = [
-    "results_._finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_095202.csv",
-    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_095053.csv",
-    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094943.csv",
-    "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094839.csv",
-    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094729.csv",
-    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094500.csv",
-    "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094229.csv",
-    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094000.csv",
-    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_093404.csv",
-    "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_093035.csv",
+    "results_finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_022058.csv",
+    "results_finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_024033.csv",
+    "results_finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_030732.csv",
+    "results_finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_033519.csv",
+    "results_Qwen_Qwen2.5-VL-7B-Instruct_20251206_020206.csv",
     ] # Name of the results CSV file to evaluate
-RESULTS_FOLDER = "./results_1130"  # Folder containing results files
+RESULTS_FOLDER = "./results_1205"  # Folder containing results files
 # ============================================================================
 
 EVALUATION_METRICS = {
@@ -62,6 +58,7 @@ class ExtractedResponse:
     raw_response: str
 
     # Ground truth from prompts.csv
+    gt_is_negative_sample: bool
     gt_object: str
     gt_object_distance: float  # in meters
     gt_object_direction: str
@@ -166,10 +163,10 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     Returns:
         ExtractedResponse object with parsed information
     """
-    required_fields = ['prompt_id', 'annotation', 'prompt_text', 'image_name', 'model_name', 'llm_response', 'object', 'object_distance', 'object_direction', 'scene', 'object_bbox']
-    for field in required_fields:
-        if not row.get(field):
-            raise ValueError(f"Required field {field} is not present in row: {row}")
+    # required_fields = ['prompt_id', 'annotation', 'prompt_text', 'image_name', 'model_name', 'llm_response', 'object', 'object_distance', 'object_direction', 'scene', 'object_bbox']
+    # for field in required_fields:
+    #     if not row.get(field):
+    #         raise ValueError(f"Required field {field} is not present in row: {row}")
 
     # Extract basic fields
     prompt_id = int(row.get('prompt_id', 0))
@@ -178,12 +175,19 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     model_name = row.get('model_name', '')
     raw_response = row.get('llm_response', '')
     gt_object = row.get('object', '')
-    gt_object_distance = float(row.get('object_distance', 0))
+    gt_object_distance = row.get('object_distance', 0)
+    if gt_object_distance == '':
+        gt_object_distance = 0
+    gt_object_distance = float(gt_object_distance)
     gt_object_direction = row.get('object_direction', '')
     gt_scene = row.get('scene', '')
     gt_object_bbox = row.get('object_bbox', '[]')
     annotation = row.get('annotation', '[]')
     depth_image = row.get('depth_image', '')
+
+    gt_is_negative_sample = False
+    if prompt_id > 100:
+        gt_is_negative_sample = True
 
     # Create response object
     extracted = ExtractedResponse(
@@ -192,6 +196,7 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
         image_name=image_name,
         model_name=model_name,
         raw_response=raw_response,
+        gt_is_negative_sample=gt_is_negative_sample,
         gt_object=gt_object,
         gt_object_distance=gt_object_distance,
         gt_object_direction=gt_object_direction,
@@ -315,7 +320,7 @@ def distance_evaluation(predicted_distance_meters: Optional[float], gt_distance_
 
     # Case 2: typical range (0.3–2 m), use relative error
     if gt_distance_meters <= 2.0:
-        error_percent = abs_error / gt_distance_meters * 100.0  # [web:30]
+        error_percent = abs_error / gt_distance_meters * 100.0
         if error_percent <= 5:
             return 5
         elif error_percent <= 10:
@@ -409,10 +414,10 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
     {{
         "object_location_description": <0-5 points>,  // How accurate is the general location description of the object?
         "object_location_detailed_area": <0-5 points>,  // How detailed and accurate is the spatial area description?
-        "direction": <0-5 points>,  // How accurate is the direction relative to camera (left/right/center/front)?
+        "direction": <0-5 points>,  // How accurate is the direction relative to camera (the direction value is an integer from 1 to 12, 1 is 1 o'clock, 2 is 2 o'clock, etc.)?
         "navigation_instructions": <0-5 points>,  // Are the navigation instructions clear, actionable, and safe?
-        "hand_guidance": <0-5 points>,  // Is the hand guidance instruction helpful and appropriate?
-        "fallback": <0-5 points>  // Is the fallback instruction reasonable and helpful?
+        "hand_guidance": <0-5 points>,  // Is the hand guidance instruction helpful, safe, and efficient?
+        "fallback": <0-5 points>  // If object is not found or image is unclear, is the fallback instructions helpful and safe to guide the user to take another photo and reposition?
     }}
 
     **Scoring Guidelines:**
@@ -424,62 +429,66 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
     - 0: Not provided or completely wrong
 
     Return ONLY the JSON object, no additional text."""
-
-    try:
-        # Call GPT-4 Vision API
-        logger.debug(f"Calling OpenAI API for prompt_id {response.prompt_id}")
-        response_llm = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
+    SLEEP_TIME = 10  # seconds
+    MAX_ATTEMPTS = 10
+    attempt = 1
+    while True:
+        try:
+            logger.debug(f"Calling OpenAI API for prompt_id {response.prompt_id}, attempt: {attempt + 1}")
+            response_llm = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
                             }
-                        }
-                    ]
-                }
-            ],
-            max_tokens=500,
-            temperature=0.0,  # Use temperature 0 for more consistent evaluation
-            response_format={"type": "json_object"}  # Request JSON mode
-        )
+                        ]
+                    }
+                ],
+                max_tokens=500,
+                temperature=0.0,  # Use temperature 0 for more consistent evaluation
+                response_format={"type": "json_object"}  # Request JSON mode
+            )
 
-        # Extract the response text
-        llm_response_text = response_llm.choices[0].message.content.strip()
+            # Extract the response text
+            llm_response_text = response_llm.choices[0].message.content.strip()
 
-        # Log the raw response for debugging
-        logger.debug(f"Raw LLM response: {llm_response_text}")
+            # Log the raw response for debugging
+            logger.debug(f"Raw LLM response: {llm_response_text}")
 
-        # Parse the JSON response using our robust extraction function
-        llm_scores = extract_json_from_response(llm_response_text)
+            # Parse the JSON response using our robust extraction function
+            llm_scores = extract_json_from_response(llm_response_text)
 
-        if llm_scores is None:
-            logger.error(f"Failed to extract JSON from LLM response for prompt_id {response.prompt_id}")
-            logger.error(f"Raw response was: {llm_response_text[:200]}...")
+            if llm_scores is None:
+                logger.error(f"Failed to extract JSON from LLM response for prompt_id {response.prompt_id}")
+                logger.error(f"Raw response was: {llm_response_text[:200]}...")
+                return scores
+
+            # Update scores with LLM evaluation
+            for key in scores.keys():
+                if key in llm_scores:
+                    scores[key] = llm_scores[key]
+
+            logger.info(f"LLM evaluation completed for prompt_id {response.prompt_id}")
             return scores
 
-        # Update scores with LLM evaluation
-        for key in scores.keys():
-            if key in llm_scores:
-                scores[key] = llm_scores[key]
-
-        logger.info(f"LLM evaluation completed for prompt_id {response.prompt_id}")
-
-    except Exception as e:
-        logger.error(f"Error in LLM evaluation for prompt_id {response.prompt_id}: {e}")
-        logger.error(f"Exception type: {type(e).__name__}")
-        # Return zero scores on error
-
-    return scores
-
+        except Exception as e:
+            if attempt >= MAX_ATTEMPTS:
+                logger.error(f"Error in LLM evaluation for prompt_id {response.prompt_id}: {e}")
+                logger.error(f"Exception type: {type(e).__name__}")
+                raise e
+            logger.info(f"Attempt {attempt + 1} failed, retrying in {SLEEP_TIME} seconds...")
+            time.sleep(SLEEP_TIME)
+            attempt += 1
 
 def evaluate(extracted_responses: List[ExtractedResponse], test_mode: bool = True) -> List[Dict[str, Any]]:
     """
@@ -497,12 +506,13 @@ def evaluate(extracted_responses: List[ExtractedResponse], test_mode: bool = Tru
 
     logger.info("="*70)
     if test_mode:
-        logger.info("Starting Evaluation (TEST MODE - 1 sample only)")
+        logger.info("Starting Evaluation (TEST MODE: evaluate only 1 sample)")
     else:
         logger.info("Starting Evaluation")
     logger.info("="*70)
 
     for idx, response in enumerate(extracted_responses):
+        gt_is_negative_sample = response.gt_is_negative_sample
         logger.info(f"Evaluating response {idx + 1}/{len(extracted_responses)} (prompt_id: {response.prompt_id})")
 
         # Initialize metric dictionary for this response
@@ -518,18 +528,19 @@ def evaluate(extracted_responses: List[ExtractedResponse], test_mode: bool = Tru
             'hand_guidance': 0,
             'fallback': 0,
             'total_score': 0,
-            'max_possible_score': sum(EVALUATION_METRICS.values())
+            'max_possible_score': sum(EVALUATION_METRICS.values()) if not gt_is_negative_sample else EVALUATION_METRICS['found']
         }
 
         # Check if object detection is correct
-        # Award points if: (1) found=True and object exists, OR (2) found=False and object doesn't exist
-        if response.found and response.gt_object_distance is not None:
+        # Award points if: 
+        # (1) positive sample: found=True and object exists
+        # (2) negative sample: found=False and object doesn't exist
+        if not gt_is_negative_sample and response.found and (response.gt_object_distance is not None and response.gt_object_distance > 1e-4):
             metric['found'] = EVALUATION_METRICS['found']
-        elif not response.found and response.gt_object_distance is None:
+        elif gt_is_negative_sample and not response.found and (response.gt_object_distance is None or response.gt_object_distance < 1e-4):
             metric['found'] = EVALUATION_METRICS['found']
         else:
             metric['found'] = 0
-            logger.info(f"  - Object detection: INCORRECT (found={response.found}, gt_exists={response.gt_object_distance is not None})")
 
         # Only evaluate further if object was correctly identified as present
         if metric['found'] > 0 and response.found:

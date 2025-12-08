@@ -338,7 +338,7 @@ def update_prompt_context(prompt: str) -> str:
 
         ## **RESPONSE FORMAT (Mandatory Structured JSON)**
 
-        You MUST always return a JSON object with the following fields:
+        You MUST always return a valid JSON object with the following fields, and NOT add any other fields or comments for any fields:
 
         ```json
         {
@@ -348,8 +348,8 @@ def update_prompt_context(prompt: str) -> str:
             "Detailed area description": "split image into 4 parts: left top, right top, left bottom, right bottom. Describe where the object appears in each part, or null if not present",
         },
         "distance_and_direction_from_camera": {
-            "distance_meters": "float (approximate distance in meters from the camera to the object) or null if not present",
-            "direction_o_clock": "integer from 1 to 12 (approximate direction in 12 o'clock format from the camera to the object) or null if not present"
+            "distance_meters": float or null if not present,
+            "direction_o_clock": integer from 1 to 12 (approximate direction in 12 o'clock format) or null if not present
         },
         "navigation_instructions": [
             "Tell the user in the second person perspective how to approach the object in the image, step-by-step instructions from the user's current facing direction to approach the object.",
@@ -499,7 +499,7 @@ def eval(
             
             # Save results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_model_name = model_name.replace("/", "_").replace(":", "_").replace("\\", "_")
+            safe_model_name = model_name.replace("./", "").replace("/", "_").replace(":", "_").replace("\\", "_")
             output_path = os.path.join(
                 output_folder,
                 f"results_{safe_model_name}_{timestamp}.csv"
