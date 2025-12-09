@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 
 # Configure query path - UPDATE THIS BEFORE RUNNING
-QUERY_PATH = "./queries-sample10/"  # User should set to "./queries/" or "./queries-sample10/"
+QUERY_PATH = "./queries/"  # User should set to "./queries/" or "./queries-sample10/"
 
 # Configure logging
 logging.basicConfig(

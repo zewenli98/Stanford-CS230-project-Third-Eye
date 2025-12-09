@@ -23,7 +23,7 @@ from PIL import Image
 # =============================================================================
 
 # Path to queries folder
-QUERY_PATH = "../../queries-sample10/"  # Change to "../queries/" or other path as needed
+QUERY_PATH = "../../queries/"  # Change to "../queries/" or other path as needed
 
 # Path to object detection model
 MODEL_PATH = "./training/last.pt"  # Path to trained object detection model
@@ -187,7 +187,6 @@ class ObjectDetector:
                     iou=iou_threshold,
                     verbose=False
                 )
-                logger.info(results)
 
                 # Parse results
                 if results and len(results) > 0:

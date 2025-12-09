@@ -31,7 +31,7 @@ from peft import PeftModel
 # =============================================================================
 
 # Path to queries folder (contains prompts.csv and pathfinder_output.csv)
-QUERY_PATH = "./queries-sample10/"  # Change to "./queries-sample10/" if needed
+QUERY_PATH = "./queries/"  # Change to "./queries-sample10/" if needed
 
 # Model and processor paths
 MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"  # Change to your model path
