@@ -27,9 +27,17 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # CONFIGURATION - Configure these settings
 # ============================================================================
 RESULTS_CSV_FILES = [
-    "agent_results_Qwen_Qwen2.5-VL-7B-Instruct_20251206_064815.csv"
+    "results_Qwen_Qwen2.5-VL-7B-Instruct_20251206_020206.csv",
+    "results_finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_022058.csv",
+    "results_finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_024033.csv",
+    "results_finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_030732.csv",
+    "results_finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_033519.csv",
+    "results_finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251209_061237.csv",
+    "results_finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-3_20251209_063809.csv",
+    "results_finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251209_072731.csv",
+    "results_finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-3_20251209_075457.csv",
     ] # Name of the results CSV file to evaluate
-RESULTS_FOLDER = "./agent-results/"  # Folder containing results files
+RESULTS_FOLDER = "./results"  # Folder containing results files
 # ============================================================================
 
 EVALUATION_METRICS = {
@@ -159,11 +167,10 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     Returns:
         ExtractedResponse object with parsed information
     """
-    # Check that required fields exist in the row (but allow empty values for negative samples)
-    required_fields = ['prompt_id', 'annotation', 'prompt_text', 'image_name', 'model_name', 'llm_response', 'object', 'object_distance', 'object_direction', 'scene', 'object_bbox']
-    for field in required_fields:
-        if field not in row:
-            raise ValueError(f"Required field {field} is not present in row: {row}")
+    # required_fields = ['prompt_id', 'annotation', 'prompt_text', 'image_name', 'model_name', 'llm_response', 'object', 'object_distance', 'object_direction', 'scene', 'object_bbox']
+    # for field in required_fields:
+    #     if not row.get(field):
+    #         raise ValueError(f"Required field {field} is not present in row: {row}")
 
     # Extract basic fields
     prompt_id = int(row.get('prompt_id', 0))
@@ -172,11 +179,10 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
     model_name = row.get('model_name', '')
     raw_response = row.get('llm_response', '')
     gt_object = row.get('object', '')
-
-    # Handle object_distance - may be empty string for negative samples
-    object_distance_str = row.get('object_distance', '0')
-    gt_object_distance = float(object_distance_str) if object_distance_str and object_distance_str.strip() else 0.0
-
+    gt_object_distance = row.get('object_distance', 0)
+    if gt_object_distance == '':
+        gt_object_distance = 0
+    gt_object_distance = float(gt_object_distance)
     gt_object_direction = row.get('object_direction', '')
     gt_scene = row.get('scene', '')
     gt_object_bbox = row.get('object_bbox', '[]')
@@ -225,25 +231,8 @@ def parse_llm_response(row: Dict[str, Any]) -> ExtractedResponse:
         # Extract distance and direction
         distance_direction = json_data.get('distance_and_direction_from_camera', {})
         if distance_direction:
-            # Convert distance to float, handling string values and None
-            distance_value = distance_direction.get('distance_meters')
-            if distance_value is not None:
-                try:
-                    extracted.predicted_distance_meters = float(distance_value)
-                except (ValueError, TypeError):
-                    extracted.predicted_distance_meters = None
-            else:
-                extracted.predicted_distance_meters = None
-
-            # Convert direction to int, handling string values and None
-            direction_value = distance_direction.get('direction_o_clock')
-            if direction_value is not None:
-                try:
-                    extracted.predicted_direction_o_clock = int(direction_value)
-                except (ValueError, TypeError):
-                    extracted.predicted_direction_o_clock = None
-            else:
-                extracted.predicted_direction_o_clock = None
+            extracted.predicted_distance_meters = distance_direction.get('distance_meters')
+            extracted.predicted_direction_o_clock = distance_direction.get('direction_o_clock')
 
         # Extract navigation instructions
         nav_instructions = json_data.get('navigation_instructions')
@@ -429,7 +418,7 @@ def evaluate_response_with_llm(response: ExtractedResponse, image_path: str) -> 
     {{
         "object_location_description": <0-5 points>,  // How accurate is the general location description of the object?
         "object_location_detailed_area": <0-5 points>,  // How detailed and accurate is the spatial area description?
-        "direction": <0-5 points>,  // How accurate is the direction relative to camera (the direction value is an integer from 1 to 12, 1 is 1 o'clock, 2 is 2 o'clock, etc.)?
+        "direction": <0-5 points>,  // How accurate is the direction relative to camera (the direction value is an integer from 1 to 12, 1 is 1 o'clock direction, 2 is 2 o'clock direction, etc.)?
         "navigation_instructions": <0-5 points>,  // Are the navigation instructions clear, actionable, and safe?
         "hand_guidance": <0-5 points>,  // Is the hand guidance instruction helpful, safe, and efficient?
         "fallback": <0-5 points>  // If object is not found or image is unclear, is the fallback instructions helpful and safe to guide the user to take another photo and reposition?
