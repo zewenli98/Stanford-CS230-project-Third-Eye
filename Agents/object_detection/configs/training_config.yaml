@@ -15,7 +15,7 @@ data:
 
 # Training Hyperparameters
 training:
-  epochs: 100
+  epochs: 200
   batch_size: 16  # Will be auto-adjusted based on GPU memory
   optimizer: SGD # "AdamW"  # SGD, Adam, AdamW
   lr0: 0.01  # Initial learning rate

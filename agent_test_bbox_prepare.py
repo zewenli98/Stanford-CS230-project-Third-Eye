@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 # Configure query path (update this as needed)
-QUERY_PATH = "./queries-sample10/"
+QUERY_PATH = "./queries/"
 
 # Configure logging
 logging.basicConfig(

@@ -1,11 +1,11 @@
 prompt_id,object_name,distance_meters,direction_clock,direction_degrees,is_fetchable,waypoints,warnings
-1,book,3.91,9 o'clock (far left),-28.72,False,11 o'clock:2.44m,
-2,Chair2,1.48,2 o'clock (right),14.63,False,1 o'clock:0.57m; 12 o'clock (straight ahead):0.75m,
-3,chair,1.88,3 o'clock (far right),24.09,False,,Could not find safe path to object
-4,chair,1.33,10 o'clock (left),-15.53,False,11 o'clock:1.77m,
-5,chairs,3.84,3 o'clock (far right),22.23,False,,Could not find safe path to object
-6,chair,2.26,10 o'clock (left),-10.13,False,12 o'clock (straight ahead):2.11m,
-7,chair,3.16,10 o'clock (left),-13.97,False,11 o'clock:3.08m,
-8,coffeemug,1.85,12 o'clock (straight ahead),2.36,False,,Could not find safe path to object
-9,BookSelf,7.37,10 o'clock (left),-10.25,False,,Could not find safe path to object
-10,chair,5.03,3 o'clock (far right),23.84,False,1 o'clock:2.58m,
+1,book,2.41,9 o'clock (far left),-27.01,False,11 o'clock:3.0m,
+2,Chair2,7.74,2 o'clock (right),15.15,False,1 o'clock:0.81m,
+3,chair,7.47,3 o'clock (far right),21.84,False,1 o'clock:3.29m,
+4,chair,5.15,10 o'clock (left),-15.77,False,11 o'clock:4.47m,
+5,chairs,7.81,10 o'clock (left),-17.37,False,11 o'clock:4.8m,
+6,chair,2.76,9 o'clock (far left),-25.9,False,11 o'clock:3.06m,
+7,chair,7.99,3 o'clock (far right),20.87,False,1 o'clock:3.64m,
+8,coffeemug,-1.0,12 o'clock (straight ahead),2.55,False,,Invalid depth data for object
+9,BookSelf,6.35,11 o'clock (slightly left),-9.97,False,11 o'clock:0.57m; 12 o'clock (straight ahead):0.62m; 11 o'clock:1.09m,
+10,chair,4.19,3 o'clock (far right),23.68,False,,Could not find safe path to object

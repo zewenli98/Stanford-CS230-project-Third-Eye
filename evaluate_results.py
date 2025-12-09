@@ -26,6 +26,19 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # ============================================================================
 # CONFIGURATION - Configure these settings
 # ============================================================================
+# RESULTS_CSV_FILES = [
+#     "results_._finetuned_models_LoRA-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_095202.csv",
+#     "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_095053.csv",
+#     "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094943.csv",
+#     "results_._finetuned_models_LoRA-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094839.csv",
+#     "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094729.csv",
+#     "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_094500.csv",
+#     "results_._finetuned_models_full_params-SpaceThinker-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_094229.csv",
+#     "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-3_20251201_094000.csv",
+#     "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-2_20251201_093404.csv",
+#     "results_._finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251201_093035.csv",
+#     ] # Name of the results CSV file to evaluate
+# RESULTS_FOLDER = "./results_1130"  # Folder containing results files
 RESULTS_CSV_FILES = [
     "results_Qwen_Qwen2.5-VL-7B-Instruct_20251206_020206.csv",
     "results_finetuned_models_full_params-OpenSpaces_MC_R1-Qwen2.5-VL-7B-Instruct_epoch-1_20251206_022058.csv",
