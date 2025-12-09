@@ -28,8 +28,8 @@ import json
 sys.path.append(str(Path(__file__).parent / 'Agents' / 'distance_calculator'))
 from train import UNet
 
-QUERY_PATH = "./queries-sample10/"
-# QUERY_PATH = "./queries/"
+# QUERY_PATH = "./queries-sample10/"
+QUERY_PATH = "./queries/"
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -234,7 +234,7 @@ class DepthGenerator:
 def generate_depth_images_from_csv(
     csv_path: str = QUERY_PATH + "prompts.csv",
     images_folder: str = QUERY_PATH + "images",
-    model_path: str = "Agents/distance_calculator/models/best.pth",
+    model_path: str = "Agents/distance_calculator/models/latest.pth",
     output_folder: str = QUERY_PATH + "generated_images",
     device: str = None
 ):
