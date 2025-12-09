@@ -23,10 +23,10 @@ from PIL import Image
 # =============================================================================
 
 # Path to queries folder
-QUERY_PATH = "../queries-sample10/"  # Change to "../queries/" or other path as needed
+QUERY_PATH = "../../queries-sample10/"  # Change to "../queries/" or other path as needed
 
 # Path to object detection model
-MODEL_PATH = "models/best.pth"  # Path to trained object detection model
+MODEL_PATH = "./training/last.pt"  # Path to trained object detection model
 
 # Confidence threshold for object detection
 CONFIDENCE_THRESHOLD = 0.25  # Minimum confidence to consider a detection valid
@@ -187,6 +187,7 @@ class ObjectDetector:
                     iou=iou_threshold,
                     verbose=False
                 )
+                logger.info(results)
 
                 # Parse results
                 if results and len(results) > 0:
