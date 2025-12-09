@@ -72,6 +72,39 @@ class ObjectDetector:
         self.model = self._load_model()
         logger.info(f"Model loaded from {model_path}")
 
+    def _normalize_object_name(self, name: str) -> str:
+        """
+        Normalize object name for matching.
+
+        Args:
+            name: Object name (e.g., "coffeemug", "Chair2", "chairs")
+
+        Returns:
+            Normalized name (e.g., "coffeemug", "chair", "chair")
+        """
+        import re
+
+        # Convert to lowercase
+        normalized = name.lower()
+
+        # Remove numbers (e.g., "chair2" -> "chair")
+        normalized = re.sub(r'\d+', '', normalized)
+
+        # Remove special characters except letters
+        normalized = re.sub(r'[^a-z]', '', normalized)
+
+        # Handle common plural forms (optional - remove trailing 's' if it makes sense)
+        # This is a simple heuristic; more sophisticated stemming could be used
+        if normalized.endswith('s') and len(normalized) > 3:
+            # Try singular form (e.g., "chairs" -> "chair")
+            # But keep words that naturally end in 's' (e.g., "glass")
+            singular = normalized[:-1]
+            # Simple check: if removing 's' gives a valid-looking word, use it
+            if not singular.endswith('s'):  # Avoid double-s words like "glass"
+                normalized = singular
+
+        return normalized
+
     def _load_model(self):
         """Load the object detection model."""
         try:
@@ -165,16 +198,41 @@ class ObjectDetector:
                     # Get class names
                     class_names = result.names  # Dict mapping class_id to name
 
-                    # Find target class id
+                    # Find target class id with intelligent mapping
                     target_class_id = None
+                    matched_class_name = None
+
+                    # Normalize target object name
+                    target_normalized = self._normalize_object_name(target_object)
+
+                    # Try different matching strategies
                     for class_id, class_name in class_names.items():
-                        if class_name.lower() == target_object.lower():
+                        class_normalized = self._normalize_object_name(class_name)
+
+                        # Strategy 1: Exact match (case insensitive)
+                        if class_normalized == target_normalized:
                             target_class_id = class_id
+                            matched_class_name = class_name
+                            break
+
+                        # Strategy 2: Class name contained in target (e.g., "mug" in "coffeemug")
+                        if class_normalized in target_normalized:
+                            target_class_id = class_id
+                            matched_class_name = class_name
+                            break
+
+                        # Strategy 3: Target contained in class name (e.g., "chair" in "armchair")
+                        if target_normalized in class_normalized:
+                            target_class_id = class_id
+                            matched_class_name = class_name
                             break
 
                     if target_class_id is None:
                         logger.warning(f"Object '{target_object}' not in model classes: {list(class_names.values())}")
+                        logger.warning(f"Normalized target: '{target_normalized}'")
                         return None
+
+                    logger.info(f"Mapped '{target_object}' to model class '{matched_class_name}'")
 
                     # Filter detections by target class
                     if result.boxes is not None and len(result.boxes) > 0:
